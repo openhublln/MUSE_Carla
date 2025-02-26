@@ -91,13 +91,5 @@ python multi_sensor_replay.py scene_2
 
 Modify sensor configuration: Edit config.yml to add/remove sensors or change their parameters.
 
-## Contributing
-Feel free to contribute to this project by:
-
-- Adding new sensor types
-- Improving visualization features
-- Enhancing data collection efficiency
-- Adding new analysis tools
-
 ## License
 This project is licensed under the terms of the MIT license.
