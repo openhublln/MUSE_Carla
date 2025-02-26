@@ -1,0 +1,139 @@
+simulation:
+  num_scenes: 3
+  ticks_per_scene: 40
+  base_save_path: "D:\\Carla-0.10.0-Win64-Shipping\\PythonAPI\\examples\\_out"
+  traffic:
+    num_vehicles: 30
+    num_pedestrians: 10
+    safe_spawn: true 
+    car_lights_on: true
+    seed: null  
+weather:
+  preset: "ClearNoon" # "ClearNoon", "CloudyNoon", "WetNoon", "WetCloudyNoon", "SoftRainNoon", "MidRainyNoon", "HardRainNoon", "ClearSunset", "CloudySunset", "WetSunset", "WetCloudySunset", "SoftRainSunset", "MidRainSunset", "HardRainSunset"
+  cloudiness: 80.0
+  precipitation: 30.0
+  precipitation_deposits: 20.0
+  wind_intensity: 10.0
+  fog_density: 15.0
+  fog_distance: 50.0
+  fog_falloff: 2.0
+  wetness: 40.0
+  sun_azimuth_angle: 180.0
+  sun_altitude_angle: 45.0
+sensors:
+  - name: "camera_1"
+    type: "camera"
+    blueprint: "sensor.camera.rgb"
+    attributes:
+      image_size_x: "1280"
+      image_size_y: "720"
+      fov: "90"
+    transform:
+      location: {x: 0, y: 0, z: 2.4}
+      rotation: {yaw: 0}
+    collect_bbox: true 
+  # - name: "camera_2"
+  #   type: "camera"
+  #   blueprint: "sensor.camera.rgb"
+  #   attributes:
+  #     image_size_x: "1280"
+  #     image_size_y: "720"
+  #     fov: "90"
+  #   transform:
+  #     location: {x: -1, y: 0, z: 2.4}
+  #     rotation: {yaw: 180}
+  #   collect_bbox: true
+  # - name: "camera_3"
+  #   type: "camera"
+  #   blueprint: "sensor.camera.rgb"
+  #   attributes:
+  #     image_size_x: "1280"
+  #     image_size_y: "720"
+  #   transform:
+  #     location: {x: 0, y: -0.5, z: 2.4}
+  #     rotation: {yaw: 45}
+  #   collect_bbox: true
+  # - name: "camera_4"
+  #   type: "camera"
+  #   blueprint: "sensor.camera.rgb"
+  #   attributes:
+  #     image_size_x: "1280"
+  #     image_size_y: "720"
+  #   transform:
+  #     location: {x: 0, y: 0.5, z: 2.4}
+  #     rotation: {yaw: -45}
+  #   collect_bbox: true
+  # - name: "camera_5"
+  #   type: "camera"
+  #   blueprint: "sensor.camera.rgb"
+  #   attributes:
+  #     image_size_x: "1280"
+  #     image_size_y: "720"
+  #   transform:
+  #     location: {x: 0, y: 0.5, z: 2.4}
+  #     rotation: {yaw: -225}
+  #   collect_bbox: true
+  # - name: "camera_6"
+  #   type: "camera"
+  #   blueprint: "sensor.camera.rgb"
+  #   attributes:
+  #     image_size_x: "1280"
+  #     image_size_y: "720"
+  #   transform:
+  #     location: {x: 0, y: -0.5, z: 2.4}
+  #     rotation: {yaw: 225}
+  #   collect_bbox: true
+  # - name: "semantic_segmentation"
+  #   type: "camera"
+  #   blueprint: "sensor.camera.semantic_segmentation"
+  #   attributes:
+  #     image_size_x: "1280"
+  #     image_size_y: "720"
+  #   transform:
+  #     location: {x: 0, y: 0, z: 2.4}
+  #     rotation: {yaw: 0}
+  # - name: "instance_segmentation"
+  #   type: "camera"
+  #   blueprint: "sensor.camera.instance_segmentation"
+  #   attributes:
+  #     image_size_x: "1280"
+  #     image_size_y: "720"
+  #   transform:
+  #     location: {x: 0, y: 0, z: 2.4}
+  #     rotation: {yaw: 0}
+  - name: "radar"
+    type: "radar"
+    blueprint: "sensor.other.radar"
+    attributes:
+      horizontal_fov: "90"
+      vertical_fov: "10"
+      points_per_second: "5000"
+      range: "250"
+    transform:
+      location: {x: 3, y: 0, z: 2}
+      rotation: {pitch: 5, yaw: 0, roll: 0}
+  - name: "lidar"
+    type: "lidar"
+    blueprint: "sensor.lidar.ray_cast"
+    attributes:
+      channels: "64"
+      range: "100"
+      points_per_second: "250000"
+      rotation_frequency: "20"
+    transform:
+      location: {x: 0, y: 0, z: 2.4}
+      rotation: {yaw: 90}
+  - name: "semantic_lidar"
+    type: "lidar"
+    blueprint: "sensor.lidar.ray_cast_semantic"
+    attributes:
+      channels: "64"
+      range: "100"
+      points_per_second: "250000"
+      rotation_frequency: "20"
+      upper_fov: "10"
+      lower_fov: "-30"
+      horizontal_fov: "360"
+    transform:
+      location: {x: 0, y: 0, z: 2.4}
+      rotation: {yaw: 90}
