@@ -1,5 +1,5 @@
 simulation:
-  num_scenes: 2
+  num_scenes: 1
   ticks_per_scene: 20
   base_save_path: ./_out
   traffic:
@@ -9,7 +9,7 @@ simulation:
     car_lights_on: true
     seed: null
 sensors:
-- name: camera_1
+- name: camera
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
@@ -18,28 +18,11 @@ sensors:
     fov: '90'
   transform:
     location:
-      x: 1.0
+      x: 0.0
       y: 0.0
-      z: 2.4
+      z: 24.0
     rotation:
       pitch: 0.0
       yaw: 0.0
       roll: 0.0
   collect_bbox: true
-- name: camera_2
-  type: camera
-  blueprint: sensor.camera.rgb
-  attributes:
-    image_size_x: '1280'
-    image_size_y: '720'
-    fov: '90'
-  transform:
-    location:
-      x: -1.0
-      y: 0.0
-      z: 2.4
-    rotation:
-      pitch: 0.0
-      yaw: 180.0
-      roll: 0.0
-  collect_bbox: false
