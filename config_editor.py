@@ -6,7 +6,6 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                             QScrollArea, QFileDialog, QMessageBox, QGroupBox,
                             QTextEdit, QSplitter, QDialog)  
 from PyQt6.QtCore import Qt, pyqtSignal, QLocale
-import json
 import os
 import subprocess
 from pathlib import Path  
@@ -654,13 +653,14 @@ class MainWindow(QMainWindow):
     def run_simulation(self):
         """Save the configuration and run the simulation"""
         try:
-            # Save configuration to config_test.yml (used by the simulation script)
-            config = {
-                "simulation": self.sim_tab.get_config()["simulation"],
-                "sensors": self.sensor_tab.get_config()
-            }
-            with open('config_test.yml', 'w') as f:
-                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            # Check if config.yml exists, if not prompt user to save first
+            if not os.path.exists('config.yml'):
+                QMessageBox.warning(
+                    self, 
+                    "Configuration Missing",
+                    "Please save your configuration first using the Save Configuration button."
+                )
+                return
             
             # Get current script directory
             current_dir = os.path.dirname(os.path.abspath(__file__))

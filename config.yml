@@ -42,4 +42,21 @@ sensors:
       pitch: 0.0
       yaw: 180.0
       roll: 0.0
-  collect_bbox: false
+  collect_bbox: true
+- name: radar
+  type: radar
+  blueprint: sensor.other.radar
+  attributes:
+    horizontal_fov: '90'
+    vertical_fov: '10'
+    points_per_second: '5000'
+    range: '250'
+  transform:
+    location:
+      x: 0.0
+      y: 0.0
+      z: 24.0
+    rotation:
+      pitch: 0.0
+      yaw: 0.0
+      roll: 0.0
