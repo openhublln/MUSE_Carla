@@ -6,6 +6,7 @@ import numpy as np
 import time
 import yaml
 import math
+import json
 from generate_bbox_annotations import process_scene
 
 def create_scene_folders(scene_id, sensor_names, base_save_path):
@@ -33,7 +34,36 @@ def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=Non
         timestamp = int(sensor_data.timestamp * 1e3)
         sensor_folder = os.path.join(save_path, sensor_name)
 
-        if isinstance(sensor_data, carla.Image):
+        if isinstance(sensor_data, carla.IMUMeasurement):
+            imu_data = {
+                "timestamp": timestamp,
+                "accelerometer": {
+                    "x": sensor_data.accelerometer.x,
+                    "y": sensor_data.accelerometer.y,
+                    "z": sensor_data.accelerometer.z
+                },
+                "gyroscope": {
+                    "x": sensor_data.gyroscope.x,
+                    "y": sensor_data.gyroscope.y,
+                    "z": sensor_data.gyroscope.z
+                },
+                "compass": sensor_data.compass
+            }
+            with open(os.path.join(sensor_folder, f"{timestamp}.json"), 'w') as f:
+                json.dump(imu_data, f, indent=2)
+
+        elif isinstance(sensor_data, carla.GnssMeasurement):
+            # Save GNSS data as JSON
+            gnss_data = {
+                "timestamp": timestamp,
+                "latitude": sensor_data.latitude,
+                "longitude": sensor_data.longitude,
+                "altitude": sensor_data.altitude
+            }
+            with open(os.path.join(sensor_folder, f"{timestamp}.json"), 'w') as f:
+                json.dump(gnss_data, f, indent=2)
+
+        elif isinstance(sensor_data, carla.Image):
             img_filename = f"{timestamp}.png"
             img_path = os.path.join(sensor_folder, img_filename)
             
@@ -80,7 +110,7 @@ def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=Non
         print(f"Error in sensor callback: {e}")
         sensor_queue.put((0, sensor_name))  # Put dummy data to avoid blocking
 
-def run_simulation(scene_id, world, vehicle, sensor_list, sensor_queue, ticks_per_scene, weather):
+def run_simulation(scene_id, world, vehicle, sensor_list, sensor_queue, ticks_per_scene):
     """ Exécute une simulation en s'assurant que chaque tick contient bien une donnée pour chaque capteur. """
 
     print(f"Simulation {scene_id} démarrée...")
@@ -135,37 +165,61 @@ def clean_scene_data(scene_path, sensor_names):
         if not os.path.isdir(sensor_folder):
             continue
         
-        # Récupérer seulement les fichiers PNG et NPY qui ne sont pas des instances
+        # Get all files with supported extensions
         files = []
         for f in os.listdir(sensor_folder):
-            if f.endswith('.png'):
-                files.append(f)
-            elif f.endswith('.npy') and not f.endswith('_instances.npy'):
+            # Skip instance segmentation files as they're paired with RGB
+            if "instance" in sensor_folder:
+                continue
+                
+            # Accept all supported file types
+            if any(f.endswith(ext) for ext in ['.png', '.npy', '.json', '.ply']):
+                # For PLY files, also check if corresponding NPY exists
+                if f.endswith('.ply'):
+                    npy_file = f[:-4] + '.npy'
+                    if not os.path.exists(os.path.join(sensor_folder, npy_file)):
+                        continue
                 files.append(f)
         
-        # Extraire les timestamps (sans l'extension)
+        # Extract timestamps (without extension)
         ts_set = set(os.path.splitext(f)[0] for f in files)
-        ts_dict[sensor] = ts_set
+        if ts_set:  # Only add if we found files
+            ts_dict[sensor] = ts_set
 
     if not ts_dict:
+        print(f"Warning: No valid files found in {scene_path}")
         return
 
-    # Calculer l'intersection de tous les timestamps
+    # Find timestamps common to all sensors
     common_ts = set.intersection(*ts_dict.values())
+    
+    if not common_ts:
+        print(f"Warning: No common timestamps found in {scene_path}")
+        return
 
-    # Pour chaque capteur, supprimer les fichiers non communs
-    for sensor, timestamps in ts_dict.items():
+    print(f"Found {len(common_ts)} common timestamps across all sensors")
+
+    # Only delete files that aren't in common timestamps
+    deleted_count = 0
+    for sensor in sensor_names:
         sensor_folder = os.path.join(scene_path, sensor)
+        if not os.path.isdir(sensor_folder):
+            continue
+            
         for file_name in os.listdir(sensor_folder):
             base_name = os.path.splitext(file_name)[0]
-            
             if base_name not in common_ts:
                 file_path = os.path.join(sensor_folder, file_name)
                 try:
                     os.remove(file_path)
-                    print(f"Deleted non-common file: {file_path}")
+                    deleted_count += 1
                 except Exception as e:
                     print(f"Error deleting file {file_path}: {e}")
+
+    if deleted_count > 0:
+        print(f"Cleaned up {deleted_count} non-synchronized files")
+    else:
+        print("All files are properly synchronized")
 
 def setup_traffic(client, world, traffic_config):
     """Configure and spawn traffic (vehicles and pedestrians)"""
@@ -373,9 +427,7 @@ def main():
         
         sim_config = config["simulation"]
         sensors_config = config["sensors"]
-        weather_config = config.get("weather", {})
-        # Fix: Get traffic config from simulation section
-        traffic_config = sim_config.get("traffic", {})  # Changed from config.get("traffic", {})
+        traffic_config = sim_config.get("traffic", {}) 
 
         num_scenes = sim_config["num_scenes"]
         ticks_per_scene = sim_config["ticks_per_scene"]
@@ -395,30 +447,6 @@ def main():
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = 0.05  # 20Hz
         world.apply_settings(settings)
-
-        # Configurer la météo en utilisant un preset s'il est défini
-        preset = weather_config.get("preset", None)
-        if preset:
-            try:
-                weather = getattr(carla.WeatherParameters, preset)
-            except AttributeError:
-                print(f"Preset '{preset}' non trouvé. Utilisation de ClearNoon par défaut.")
-                weather = carla.WeatherParameters.ClearNoon
-        else:
-            weather = carla.WeatherParameters(
-                cloudiness = weather_config.get("cloudiness", 0.0),
-                precipitation = weather_config.get("precipitation", 0.0),
-                precipitation_deposits = weather_config.get("precipitation_deposits", 0.0),
-                wind_intensity = weather_config.get("wind_intensity", 0.0),
-                fog_density = weather_config.get("fog_density", 0.0),
-                fog_distance = weather_config.get("fog_distance", 0.0),
-                fog_falloff = weather_config.get("fog_falloff", 0.0),
-                wetness = weather_config.get("wetness", 0.0),
-                sun_azimuth_angle = weather_config.get("sun_azimuth_angle", 0.0),
-                sun_altitude_angle = weather_config.get("sun_altitude_angle", 90.0)
-            )
-        world.set_weather(weather)
-        print("Météo initiale :", world.get_weather())
 
         # Setup traffic before starting sensor collection
         print("Setting up traffic...")
@@ -485,7 +513,7 @@ def main():
                                     sensor_callback(data, q, name, path, w, v))
 
                     # Run simulation
-                    run_simulation(scene_id, world, vehicle, sensor_list, sensor_queue, ticks_per_scene, weather)
+                    run_simulation(scene_id, world, vehicle, sensor_list, sensor_queue, ticks_per_scene)
                     scene_completed = True
                     break  # Scene completed successfully, exit retry loop
 

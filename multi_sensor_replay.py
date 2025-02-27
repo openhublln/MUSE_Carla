@@ -28,8 +28,8 @@ class FlexibleDataPlayer:
         for sensor_cfg in sensors_config:
             sname = sensor_cfg["name"]
             stype = sensor_cfg["type"].lower()
-            # Définir le pattern en fonction du type
-            pattern = "*.png" if stype == "camera" else "*.npy"
+            # Update pattern for IMU files
+            pattern = "*.json" if stype in ["gnss", "imu"] else "*.png" if stype == "camera" else "*.npy"
             sensor_folder = self.data_dir / sname
             if sensor_folder.exists() and sensor_folder.is_dir():
                 files = sorted(list(sensor_folder.glob(pattern)))
@@ -280,11 +280,54 @@ class FlexibleDataPlayer:
             print(f"Error processing semantic lidar file {file_path.name}: {e}")
             return pygame.Surface(self.cell_size)
 
+    def process_imu(self, file_path):
+        """Process IMU data for visualization"""
+        try:
+            with open(file_path) as f:
+                data = json.load(f)
+            
+            # Create a surface to display IMU data
+            surface = pygame.Surface(self.cell_size)
+            surface.fill((0, 0, 0))  # Black background
+            
+            # Render IMU data
+            font = pygame.font.Font(None, 32)
+            texts = [
+                "Accelerometer (m/s²):",
+                f"X: {data['accelerometer']['x']:.2f}",
+                f"Y: {data['accelerometer']['y']:.2f}",
+                f"Z: {data['accelerometer']['z']:.2f}",
+                "",
+                "Gyroscope (rad/s):",
+                f"X: {data['gyroscope']['x']:.2f}",
+                f"Y: {data['gyroscope']['y']:.2f}",
+                f"Z: {data['gyroscope']['z']:.2f}",
+                "",
+                f"Compass: {data['compass']:.2f}°"
+            ]
+            
+            y_offset = 20
+            for text in texts:
+                text_surface = font.render(text, True, (255, 255, 255))
+                text_rect = text_surface.get_rect(center=(self.cell_size[0]/2, y_offset))
+                surface.blit(text_surface, text_rect)
+                y_offset += 30
+                
+            return surface
+            
+        except Exception as e:
+            print(f"Error processing IMU file {file_path}: {e}")
+            return pygame.Surface(self.cell_size)
+
     def process_sensor(self, sensor, timestamp):
         # Look for a file whose stem equals the timestamp
         file = next((f for f in sensor["files"] if int(f.stem) == timestamp), None)
         if file:
-            if sensor["type"] == "camera":
+            if sensor["type"] == "imu":
+                return self.process_imu(file)
+            elif sensor["type"] == "gnss":
+                return self.process_gnss(file)
+            elif sensor["type"] == "camera":
                 processed = self.process_camera(file, sensor["name"])  # Le nom est maintenant accessible
             elif sensor["type"] == "radar":
                 processed = self.process_radar(file)
@@ -298,6 +341,37 @@ class FlexibleDataPlayer:
         else:
             # Use last valid if available
             return sensor["last_valid"] if sensor["last_valid"] is not None else pygame.Surface(self.cell_size)
+
+    def process_gnss(self, file_path):
+        """Process GNSS data for visualization"""
+        try:
+            with open(file_path) as f:
+                data = json.load(f)
+            
+            # Create a surface to display GNSS data
+            surface = pygame.Surface(self.cell_size)
+            surface.fill((0, 0, 0))  # Black background
+            
+            # Render text
+            font = pygame.font.Font(None, 36)
+            texts = [
+                f"Latitude: {data['latitude']:.6f}°",
+                f"Longitude: {data['longitude']:.6f}°",
+                f"Altitude: {data['altitude']:.2f}m"
+            ]
+            
+            y_offset = 20
+            for text in texts:
+                text_surface = font.render(text, True, (255, 255, 255))
+                text_rect = text_surface.get_rect(center=(self.cell_size[0]/2, y_offset))
+                surface.blit(text_surface, text_rect)
+                y_offset += 40
+                
+            return surface
+            
+        except Exception as e:
+            print(f"Error processing GNSS file {file_path}: {e}")
+            return pygame.Surface(self.cell_size)
 
     def run(self):
         running = True
