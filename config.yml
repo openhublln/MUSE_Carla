@@ -1,7 +1,7 @@
 simulation:
-  num_scenes: 3
-  ticks_per_scene: 40
-  base_save_path: "D:\\Carla-0.10.0-Win64-Shipping\\PythonAPI\\examples\\_out"
+  num_scenes: 2
+  ticks_per_scene: 20
+  base_save_path: "./_out"  
   traffic:
     num_vehicles: 30
     num_pedestrians: 10
@@ -112,17 +112,17 @@ sensors:
     transform:
       location: {x: 3, y: 0, z: 2}
       rotation: {pitch: 5, yaw: 0, roll: 0}
-  - name: "lidar"
-    type: "lidar"
-    blueprint: "sensor.lidar.ray_cast"
-    attributes:
-      channels: "64"
-      range: "100"
-      points_per_second: "250000"
-      rotation_frequency: "20"
-    transform:
-      location: {x: 0, y: 0, z: 2.4}
-      rotation: {yaw: 90}
+  # - name: "lidar"
+  #   type: "lidar"
+  #   blueprint: "sensor.lidar.ray_cast"
+  #   attributes:
+  #     channels: "64"
+  #     range: "100"
+  #     points_per_second: "250000"
+  #     rotation_frequency: "20"
+  #   transform:
+  #     location: {x: 0, y: 0, z: 2.4}
+  #     rotation: {yaw: 90}
   - name: "semantic_lidar"
     type: "lidar"
     blueprint: "sensor.lidar.ray_cast_semantic"

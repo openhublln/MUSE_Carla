@@ -1,5 +1,3 @@
-import json
-import datetime
 from queue import Queue, Empty
 import os
 import carla
@@ -178,44 +176,132 @@ def setup_traffic(client, world, traffic_config):
             blueprints = [x for x in blueprints if x.get_attribute('base_type') == 'car']
         blueprintsWalkers = world.get_blueprint_library().filter('walker.pedestrian.*')
 
-        # Get spawn points
+        # Get spawn points for vehicles
         spawn_points = world.get_map().get_spawn_points()
         num_spawn_points = len(spawn_points)
-        num_vehicles = min(traffic_config.get("num_vehicles", 30), num_spawn_points)
 
-        # Spawn vehicles
+        # Get numbers from config (remove default values)
+        num_vehicles = traffic_config["num_vehicles"] 
+        num_pedestrians = traffic_config["num_pedestrians"]  
+        
+        # Limit vehicles to available spawn points
+        if num_vehicles > num_spawn_points:
+            print(f"Warning: Requested {num_vehicles} vehicles but only {num_spawn_points} spawn points available")
+            num_vehicles = num_spawn_points
+
+        # -------------
+        # Spawn Vehicles
+        # -------------
         batch = []
         vehicle_list = []
-        for n, transform in enumerate(random.sample(spawn_points, num_vehicles)):
+        random.shuffle(spawn_points)
+        for n, transform in enumerate(spawn_points):
+            if n >= num_vehicles:
+                break
             blueprint = random.choice(blueprints)
             if blueprint.has_attribute('color'):
                 color = random.choice(blueprint.get_attribute('color').recommended_values)
                 blueprint.set_attribute('color', color)
             blueprint.set_attribute('role_name', 'autopilot')
-            batch.append(carla.command.SpawnActor(blueprint, transform))
+            batch.append(carla.command.SpawnActor(blueprint, transform)
+                .then(carla.command.SetAutopilot(carla.command.FutureActor, True)))
 
-        # Apply batch spawn
+        # Apply batch spawn for vehicles
         for response in client.apply_batch_sync(batch, True):
             if response.error:
                 print(f"Error spawning vehicle: {response.error}")
             else:
                 vehicle_list.append(response.actor_id)
 
-        # Set up traffic manager
+        # -------------
+        # Spawn Walkers
+        # -------------
+        # Some settings
+        percentagePedestriansRunning = 0.0      # how many pedestrians will run
+        percentagePedestriansCrossing = 0.0     # how many pedestrians will walk through the road
+        
+        # 1. Take all the random locations to spawn
+        spawn_points = []
+        for i in range(num_pedestrians):
+            spawn_point = carla.Transform()
+            loc = world.get_random_location_from_navigation()
+            if loc is not None:
+                spawn_point.location = loc
+                spawn_point.location.z += 1  # Spawn slightly above ground
+                spawn_points.append(spawn_point)
+
+        # 2. Spawn the walker objects
+        batch = []
+        walker_speed = []
+        walkers_list = []
+        
+        for spawn_point in spawn_points:
+            walker_bp = random.choice(blueprintsWalkers)
+            # set as not invincible
+            if walker_bp.has_attribute('is_invincible'):
+                walker_bp.set_attribute('is_invincible', 'false')
+            # Set the max speed
+            if walker_bp.has_attribute('speed'):
+                if random.random() > percentagePedestriansRunning:
+                    # Walking
+                    walker_speed.append(walker_bp.get_attribute('speed').recommended_values[1])
+                else:
+                    # Running
+                    walker_speed.append(walker_bp.get_attribute('speed').recommended_values[2])
+            else:
+                walker_speed.append(0.0)
+            batch.append(carla.command.SpawnActor(walker_bp, spawn_point))
+
+        # 2.1 Apply batch spawn
+        results = client.apply_batch_sync(batch, True)
+        walker_speed2 = []
+        for i in range(len(results)):
+            if not results[i].error:
+                walkers_list.append({"id": results[i].actor_id})
+                walker_speed2.append(walker_speed[i])
+        walker_speed = walker_speed2
+
+        # 3. Spawn the walker controllers
+        batch = []
+        walker_controller_bp = world.get_blueprint_library().find('controller.ai.walker')
+        for i in range(len(walkers_list)):
+            batch.append(carla.command.SpawnActor(walker_controller_bp, carla.Transform(), walkers_list[i]["id"]))
+
+        # 3.1 Apply batch spawn
+        results = client.apply_batch_sync(batch, True)
+        for i in range(len(results)):
+            if not results[i].error:
+                walkers_list[i]["con"] = results[i].actor_id
+
+        # 4. Initialize each controller and set target to walk to
+        walker_controller_list = []
+        world.set_pedestrians_cross_factor(percentagePedestriansCrossing)
+        for i in range(len(walkers_list)):
+            controller_id = walkers_list[i]["con"]
+            controller = world.get_actor(controller_id)
+            if controller is None:
+                continue
+            controller.start()
+            controller.go_to_location(world.get_random_location_from_navigation())
+            controller.set_max_speed(float(walker_speed[i]))
+            walker_controller_list.append(controller_id)
+
+        # Set up traffic manager for vehicles
         traffic_manager = client.get_trafficmanager(8000)
         traffic_manager.set_synchronous_mode(True)
         traffic_manager.set_global_distance_to_leading_vehicle(2.5)
         traffic_manager.global_percentage_speed_difference(30.0)
 
-        # Set vehicles to autopilot
-        vehicles = world.get_actors(vehicle_list)
-        for vehicle in vehicles:
-            vehicle.set_autopilot(True, traffic_manager.get_port())
-            if traffic_config.get("car_lights_on", False):
-                vehicle.set_light_state(carla.VehicleLightState.All)
+        # Set vehicle lights if specified
+        if traffic_config.get("car_lights_on", False):
+            for vehicle_id in vehicle_list:
+                vehicle = world.get_actor(vehicle_id)
+                if vehicle is not None:
+                    vehicle.set_light_state(carla.VehicleLightState.All)
 
-        print(f"Spawned {len(vehicle_list)} vehicles")
-        return vehicle_list
+        all_ids = vehicle_list + [w["id"] for w in walkers_list] + walker_controller_list
+        print(f"Successfully spawned {len(vehicle_list)} vehicles and {len(walkers_list)} walkers")
+        return all_ids
 
     except Exception as e:
         print(f"Error setting up traffic: {e}")
@@ -244,6 +330,37 @@ def process_sensor_config(sensors_config):
     
     return processed_config
 
+def spawn_ego_vehicle(world, blueprint_library, traffic_manager, max_retries=10):
+    """Safely spawn the ego vehicle by trying different spawn points"""
+    spawn_points = world.get_map().get_spawn_points()
+    random.shuffle(spawn_points)  # Randomize spawn points
+    
+    bp = blueprint_library.find('vehicle.lincoln.mkz')
+    bp.set_attribute('role_name', 'ego')
+    
+    for retry in range(max_retries):
+        if retry > 0:
+            print(f"Retrying ego vehicle spawn (attempt {retry + 1}/{max_retries})")
+        
+        # Try each spawn point until we find one that works
+        for spawn_point in spawn_points:
+            try:
+                vehicle = world.try_spawn_actor(bp, spawn_point)
+                if vehicle is not None:
+                    # Successfully spawned - set autopilot and return
+                    vehicle.set_autopilot(True, traffic_manager.get_port())
+                    print(f"Successfully spawned ego vehicle after {retry + 1} attempts")
+                    return vehicle
+            except Exception as e:
+                continue
+        
+        # If we get here, no spawn points worked - wait a bit and try again
+        print("All spawn points blocked, waiting for clearance...")
+        world.tick()  # Tick the world to update physics
+        time.sleep(0.5)
+    
+    raise RuntimeError(f"Failed to spawn ego vehicle after {max_retries} attempts")
+
 def main():
     """ Initialise Carla, configure les paramètres et lance les simulations """
     try:
@@ -257,7 +374,8 @@ def main():
         sim_config = config["simulation"]
         sensors_config = config["sensors"]
         weather_config = config.get("weather", {})
-        traffic_config = config.get("traffic", {})
+        # Fix: Get traffic config from simulation section
+        traffic_config = sim_config.get("traffic", {})  # Changed from config.get("traffic", {})
 
         num_scenes = sim_config["num_scenes"]
         ticks_per_scene = sim_config["ticks_per_scene"]
@@ -318,59 +436,78 @@ def main():
         scene_paths = []  # Liste pour stocker les dossiers de scènes traitées
 
         for scene_id in range(1, num_scenes + 1):
-            # Création des dossiers pour la scène via la fonction adaptée
-            sensor_names = [s["name"] for s in sensors_config]
-            save_path = create_scene_folders(scene_id, sensor_names, base_save_path)
-            scene_paths.append(save_path)
-
-            # Création de la file d'attente des capteurs et récupération du blueprint_library
-            sensor_queue = Queue()
-            blueprint_library = world.get_blueprint_library()
-
-            # Spawn du véhicule
-            spawn_points = world.get_map().get_spawn_points()
-            spawn_point = random.choice(spawn_points)
-            bp = blueprint_library.find('vehicle.lincoln.mkz')
-            vehicle = world.spawn_actor(bp, spawn_point)
-            vehicle.set_autopilot(True, traffic_manager.get_port())
-
-            print("Véhicule spawné, attente de stabilisation...")
-            for _ in range(20):  # Increased stabilization ticks
+            scene_completed = False
+            max_scene_retries = 3  # Maximum number of retries per scene
+            
+            for scene_retry in range(max_scene_retries):
                 try:
-                    world.tick()
-                except:
-                    time.sleep(0.1)
-            
-            try:
-                vehicle.set_autopilot(True, traffic_manager.get_port())
-            except Exception as e:
-                print(f"Warning: Could not enable autopilot: {e}")
-                
-            print("Véhicule prêt, démarrage des capteurs.")
+                    # Create folders and sensor queue
+                    sensor_names = [s["name"] for s in sensors_config]
+                    save_path = create_scene_folders(scene_id, sensor_names, base_save_path)
+                    scene_paths.append(save_path)
+                    sensor_queue = Queue()
+                    blueprint_library = world.get_blueprint_library()
 
-            sensor_list = []
-            # Création des capteurs depuis la configuration
-            for sensor in sensors_config:
-                bp_sensor = blueprint_library.find(sensor["blueprint"])
-                for attr, value in sensor["attributes"].items():
-                    bp_sensor.set_attribute(attr, value)
-                loc = sensor["transform"]["location"]
-                rot = sensor["transform"]["rotation"]
-                transform = carla.Transform(
-                    carla.Location(x=loc["x"], y=loc["y"], z=loc["z"]),
-                    carla.Rotation(pitch=rot.get("pitch", 0), yaw=rot["yaw"], roll=rot.get("roll", 0))
-                )
-                actor = world.spawn_actor(bp_sensor, transform, attach_to=vehicle)
-                sensor_list.append(actor)
-                # Passer world et vehicle au callback
-                actor.listen(lambda data, q=sensor_queue, name=sensor["name"], 
-                           path=save_path, w=world, v=vehicle:
-                             sensor_callback(data, q, name, path, w, v))
-            
-            # Lancer la simulation en passant ticks_per_scene depuis la config
-            run_simulation(scene_id, world, vehicle, sensor_list, sensor_queue, ticks_per_scene, weather)
-        print("Toutes les scènes ont été simulées !")
-        
+                    # Try to spawn ego vehicle with retries
+                    print(f"\nScene {scene_id} - Attempt {scene_retry + 1}/{max_scene_retries}")
+                    try:
+                        vehicle = spawn_ego_vehicle(world, blueprint_library, traffic_manager)
+                    except RuntimeError as e:
+                        print(f"Failed to spawn ego vehicle: {e}")
+                        if scene_retry < max_scene_retries - 1:
+                            print("Retrying scene...")
+                            continue
+                        else:
+                            print("Max retries reached, skipping scene")
+                            break
+
+                    print("Ego vehicle spawned, waiting for stabilization...")
+                    for _ in range(20):
+                        world.tick()
+
+                    # Setup sensors and run simulation
+                    sensor_list = []
+                    for sensor in sensors_config:
+                        bp_sensor = blueprint_library.find(sensor["blueprint"])
+                        for attr, value in sensor["attributes"].items():
+                            bp_sensor.set_attribute(attr, value)
+                        loc = sensor["transform"]["location"]
+                        rot = sensor["transform"]["rotation"]
+                        transform = carla.Transform(
+                            carla.Location(x=loc["x"], y=loc["y"], z=loc["z"]),
+                            carla.Rotation(pitch=rot.get("pitch", 0), yaw=rot["yaw"], roll=rot.get("roll", 0))
+                        )
+                        actor = world.spawn_actor(bp_sensor, transform, attach_to=vehicle)
+                        sensor_list.append(actor)
+                        # Passer world et vehicle au callback
+                        actor.listen(lambda data, q=sensor_queue, name=sensor["name"], 
+                                    path=save_path, w=world, v=vehicle:
+                                    sensor_callback(data, q, name, path, w, v))
+
+                    # Run simulation
+                    run_simulation(scene_id, world, vehicle, sensor_list, sensor_queue, ticks_per_scene, weather)
+                    scene_completed = True
+                    break  # Scene completed successfully, exit retry loop
+
+                except Exception as e:
+                    print(f"Error during scene {scene_id}: {e}")
+                    if scene_retry < max_scene_retries - 1:
+                        print("Retrying scene...")
+                        continue
+                    else:
+                        print("Max retries reached, skipping scene")
+                finally:
+                    # Cleanup if needed
+                    if 'vehicle' in locals() and vehicle is not None and vehicle.is_alive:
+                        vehicle.destroy()
+                    if 'sensor_list' in locals():
+                        for sensor in sensor_list:
+                            if sensor.is_alive:
+                                sensor.destroy()
+
+            if not scene_completed:
+                print(f"Failed to complete scene {scene_id} after {max_scene_retries} attempts")
+
         # Nettoyer toutes les scènes après la fin des simulations
         for path in scene_paths:
             print("Nettoyage du dataset pour la scène", path)

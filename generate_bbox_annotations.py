@@ -84,7 +84,7 @@ def process_scene(scene_path):
     with open('config.yml', 'r') as f:
         config = yaml.safe_load(f)
     
-    print(f"\nProcessing scene: {scene_path}")
+    print(f"Processing scene: {scene_path}")
     
     # Get all camera folders
     camera_folders = []
@@ -107,16 +107,16 @@ def process_scene(scene_path):
         if not os.path.exists(instance_folder):
             continue
             
-        print(f"\nProcessing {camera_name}...")
+        print(f"Processing {camera_name}", end="... ")
         
         # Process each RGB image
         rgb_images = glob.glob(os.path.join(camera_folder, "*.png"))
+        processed = 0
         for rgb_path in rgb_images:
             instance_path = find_paired_instance_image(rgb_path, instance_folder)
             if not instance_path:
                 continue
                 
-            print(f"Processing: {os.path.basename(rgb_path)}")
             try:
                 boxes, instance_ids = detect_vehicle_instance_boxes(instance_path)
                 
@@ -138,11 +138,11 @@ def process_scene(scene_path):
                 json_path = os.path.join(camera_folder, f"{timestamp}_bbox.json")
                 with open(json_path, 'w') as f:
                     json.dump(bbox_data, f, indent=2)
-                
-                print(f"Saved annotations: {json_path} ({len(boxes)} vehicles)")
+                processed += 1
                 
             except Exception as e:
-                print(f"Error processing {rgb_path}: {e}")
+                print(f"\nError processing {rgb_path}: {e}")
+        print(f"done ({processed} frames)")
 
 def main():
     with open('config.yml', 'r') as f:
