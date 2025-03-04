@@ -118,14 +118,266 @@ class SensorTab(QWidget):
     """Tab for sensor configuration"""
     configChanged = pyqtSignal()
     
+    # Add "Custom Sensor" to the beginning of the preset order
+    SENSOR_PRESET_ORDER = ["Custom Sensor"] + [
+        "Camera_Front", "Camera_Back", "Camera_FrontRight", "Camera_FrontLeft", 
+        "Camera_BackRight", "Camera_BackLeft", "Radar_Front", "Radar_FrontRight", 
+        "Radar_FrontLeft", "Radar_BackLeft", "Radar_BackRight", "Lidar", 
+        "Semantic_Lidar", "GNSS", "IMU"
+    ]
+    
+    # Add a custom sensor preset with default values
+    SENSOR_PRESETS = {
+        "Custom Sensor": {
+            "type": "Camera",
+            "attributes": {
+                "image_size_x": 800,
+                "image_size_y": 600,
+                "fov": 90.0,
+            },
+            "transform": {
+                "location": {"x": 0, "y": 0, "z": 2.4},
+                "rotation": {"yaw": 0}
+            },
+            "collect_bbox": True
+        },
+        "Camera_Front": {
+            "type": "Camera",
+            "attributes": {
+                "image_size_x": 800,
+                "image_size_y": 600,
+                "fov": 90.0,
+            },
+            "transform": {
+                "location": {"x": 1, "y": 0, "z": 2.4},
+                "rotation": {"yaw": 0}
+            },
+            "collect_bbox": True
+        },
+        "Camera_Back": {
+            "type": "Camera",
+            "attributes": {
+                "image_size_x": 800,
+                "image_size_y": 600,
+                "fov": 90.0,
+            },
+            "transform": {
+                "location": {"x": -1, "y": 0, "z": 2.4},
+                "rotation": {"yaw": 180}
+            },
+            "collect_bbox": True
+        },
+        "Camera_FrontRight": {
+            "type": "Camera",
+            "attributes": {
+                "image_size_x": 800,
+                "image_size_y": 600,
+                "fov": 90.0,
+            },
+            "transform": {
+                "location": {"x": 1, "y": -0.5, "z": 2.4},
+                "rotation": {"yaw": 45}
+            },
+            "collect_bbox": True
+        },
+        "Camera_FrontLeft": {
+            "type": "Camera",
+            "attributes": {
+                "image_size_x": 800,
+                "image_size_y": 600,
+                "fov": 90.0,
+            },
+            "transform": {
+                "location": {"x": 1, "y": 0.5, "z": 2.4},
+                "rotation": {"yaw": -45}
+            },
+            "collect_bbox": True
+        },
+        "Camera_BackRight": {
+            "type": "Camera",
+            "attributes": {
+                "image_size_x": 800,
+                "image_size_y": 600,
+                "fov": 90.0,
+            },
+            "transform": {
+                "location": {"x": 0, "y": 0.5, "z": 2.4},
+                "rotation": {"yaw": -225} 
+            },
+            "collect_bbox": True
+        },
+        "Camera_BackLeft": {
+            "type": "Camera",
+            "attributes": {
+                "image_size_x": 800,
+                "image_size_y": 600,
+                "fov": 90.0,
+            },
+            "transform": {
+                "location": {"x": 0, "y": -0.5, "z": 2.4},
+                "rotation": {"yaw": 225}  
+            },
+            "collect_bbox": True
+        },
+        "Radar_Front": {
+            "type": "Radar",
+            "attributes": {
+                "horizontal_fov": 90,
+                "vertical_fov": 10,
+                "points_per_second": 5000,
+                "range": 250
+            },
+            "transform": {
+                "location": {"x": 3, "y": 0, "z": 1.5},
+                "rotation": {"pitch": 5, "yaw": 0, "roll": 0}
+            }
+        },
+        "Radar_FrontRight": {
+            "type": "Radar",
+            "attributes": {
+                "horizontal_fov": 90,
+                "vertical_fov": 10,
+                "points_per_second": 5000,
+                "range": 250
+            },
+            "transform": {
+                "location": {"x": 2, "y": -0.5, "z": 1.5},
+                "rotation": {"pitch": 5, "yaw": 90, "roll": 0}
+            }
+        },
+        "Radar_FrontLeft": {
+            "type": "Radar",
+            "attributes": {
+                "horizontal_fov": 90,
+                "vertical_fov": 10,
+                "points_per_second": 5000,
+                "range": 250
+            },
+            "transform": {
+                "location": {"x": 2, "y": 0.5, "z": 1.5},
+                "rotation": {"pitch": 5, "yaw": -90, "roll": 0}
+            }
+        },
+        "Radar_BackLeft": {
+            "type": "Radar",
+            "attributes": {
+                "horizontal_fov": 90,
+                "vertical_fov": 10,
+                "points_per_second": 5000,
+                "range": 250
+            },
+            "transform": {
+                "location": {"x": -1.5, "y": 0.5, "z": 1.5},
+                "rotation": {"pitch": 5, "yaw": 180, "roll": 0}
+            }
+        },
+        "Radar_BackRight": {
+            "type": "Radar",
+            "attributes": {
+                "horizontal_fov": 90,
+                "vertical_fov": 10,
+                "points_per_second": 5000,
+                "range": 250
+            },
+            "transform": {
+                "location": {"x": -1.5, "y": -0.5, "z": 1.5},
+                "rotation": {"pitch": 5, "yaw": 180, "roll": 0}
+            }
+        },
+        "Lidar": {
+            "type": "LIDAR",
+            "blueprint": "sensor.lidar.ray_cast",
+            "attributes": {
+                "channels": 64,
+                "range": 100,
+                "points_per_second": 250000,
+                "rotation_frequency": 20.0,
+                "upper_fov": 10.0,
+                "lower_fov": -30.0,
+                "horizontal_fov": 360.0,
+                "atmosphere_attenuation_rate": 0.004,
+                "dropoff_general_rate": 0.45,
+                "dropoff_intensity_limit": 0.8,
+                "dropoff_zero_intensity": 0.4,
+                "noise_stddev": 0.0
+            },
+            "transform": {
+                "location": {"x": 0, "y": 0, "z": 2.4},
+                "rotation": {"yaw": 90}
+            }
+        },
+        "Semantic_Lidar": {
+            "type": "Semantic LIDAR",
+            "attributes": {
+                "channels": 64,
+                "range": 100,
+                "points_per_second": 250000,
+                "rotation_frequency": 20,
+                "upper_fov": 10,
+                "lower_fov": -30,
+                "horizontal_fov": 360
+            },
+            "transform": {
+                "location": {"x": 0, "y": 0, "z": 2.4},
+                "rotation": {"yaw": 90}
+            }
+        },
+        "GNSS": {
+            "type": "GNSS",
+            "attributes": {
+                "noise_alt_bias": 0.0,
+                "noise_alt_stddev": 0.1,
+                "noise_lat_bias": 0.0,
+                "noise_lat_stddev": 0.1,
+                "noise_lon_bias": 0.0,
+                "noise_lon_stddev": 0.1
+            },
+            "transform": {
+                "location": {"x": 0, "y": 0, "z": 2.4},
+                "rotation": {"pitch": 0, "yaw": 0, "roll": 0}
+            }
+        },
+        "IMU": {
+            "type": "IMU",
+            "attributes": {
+                "noise_accel_stddev_x": 0.1,
+                "noise_accel_stddev_y": 0.1,
+                "noise_accel_stddev_z": 0.1,
+                "noise_gyro_stddev_x": 0.1,
+                "noise_gyro_stddev_y": 0.1,
+                "noise_gyro_stddev_z": 0.1,
+                "noise_gyro_bias_x": 0.0,
+                "noise_gyro_bias_y": 0.0,
+                "noise_gyro_bias_z": 0.0
+            },
+            "transform": {
+                "location": {"x": 0, "y": 0, "z": 0},
+                "rotation": {"pitch": 0, "yaw": 0, "roll": 0}
+            }
+        }
+    }
+
     def __init__(self):
         super().__init__()
         self.layout = QVBoxLayout()
         
-        # Add sensor button
+        # Create button container with simpler layout
+        button_container = QWidget()
+        button_layout = QHBoxLayout()
+        
+        # Add preset selector dropdown
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems(self.SENSOR_PRESET_ORDER)
+        button_layout.addWidget(QLabel("Select Sensor :"))
+        button_layout.addWidget(self.preset_combo)
+        
+        # Single "Add Sensor" button
         add_btn = QPushButton("Add Sensor")
-        add_btn.clicked.connect(self._add_sensor)
-        self.layout.addWidget(add_btn)
+        add_btn.clicked.connect(self._add_preset)  # Now using _add_preset for all sensors
+        button_layout.addWidget(add_btn)
+        
+        button_container.setLayout(button_layout)
+        self.layout.addWidget(button_container)
         
         # Scroll area for sensors
         scroll = QScrollArea()
@@ -140,9 +392,53 @@ class SensorTab(QWidget):
         self.sensors = []
     
     def _add_sensor(self):
+        # This method is no longer needed but kept for compatibility
+        self._add_preset()
+    
+    def _add_preset(self):
+        """Add either a custom or pre-configured sensor based on selection"""
+        preset_name = self.preset_combo.currentText()
+        preset = self.SENSOR_PRESETS[preset_name]
+        
         sensor = SensorWidget(self)
         sensor.configChanged.connect(self.configChanged.emit)
         sensor.deleteRequested.connect(self._remove_sensor)
+        
+        # For custom sensor, just set a unique name
+        if preset_name == "Custom Sensor":
+            sensor.name.setText(f"new_sensor_{len(self.sensors)}")
+        else:
+            # Configure the sensor according to preset
+            sensor.name.setText(preset_name)
+            sensor.type.setCurrentText(preset["type"])
+            
+            # Set attributes
+            for name, value in preset["attributes"].items():
+                if name in sensor.attributes_dict:
+                    sensor.attributes_dict[name].setValue(value)
+            
+            # Set transform with full rotation values
+            if "transform" in preset:
+                if "location" in preset["transform"]:
+                    loc = preset["transform"]["location"]
+                    sensor.transform.location.x.setValue(loc.get("x", 0))
+                    sensor.transform.location.y.setValue(loc.get("y", 0))
+                    sensor.transform.location.z.setValue(loc.get("z", 0))
+                
+                if "rotation" in preset["transform"]:
+                    rot = preset["transform"]["rotation"]
+                    # Only set the provided rotation values
+                    if "pitch" in rot:
+                        sensor.transform.rotation.pitch.setValue(float(rot["pitch"]))
+                    if "yaw" in rot:
+                        sensor.transform.rotation.yaw.setValue(float(rot["yaw"]))
+                    if "roll" in rot:
+                        sensor.transform.rotation.roll.setValue(float(rot["roll"]))
+            
+            # Set bbox collection for cameras
+            if preset["type"] == "Camera" and "collect_bbox" in preset:
+                sensor.collect_bbox.setChecked(preset["collect_bbox"])
+        
         self.sensors.append(sensor)
         self.sensors_layout.addWidget(sensor)
         self.configChanged.emit()
@@ -188,6 +484,8 @@ class SensorWidget(QGroupBox):
     
     SENSOR_TYPES = {
         "Camera": "sensor.camera.rgb",
+        "Semantic Camera": "sensor.camera.semantic_segmentation",
+        "Instance Camera": "sensor.camera.instance_segmentation",
         "Radar": "sensor.other.radar",
         "LIDAR": "sensor.lidar.ray_cast",
         "Semantic LIDAR": "sensor.lidar.ray_cast_semantic",
@@ -200,14 +498,13 @@ class SensorWidget(QGroupBox):
         self.layout = QVBoxLayout()
         self.attributes_dict = {}  # Initialize attributes dict
         
-        # Name field
+        # Name field and type selector containers with fixed heights
         name_layout = QHBoxLayout()
         name_layout.addWidget(QLabel("Name:"))
         self.name = QLineEdit("new_sensor")
         self.name.textChanged.connect(self.configChanged.emit)
         name_layout.addWidget(self.name)
         
-        # Type selector
         type_layout = QHBoxLayout()
         type_layout.addWidget(QLabel("Type:"))
         self.type = QComboBox()
@@ -215,7 +512,21 @@ class SensorWidget(QGroupBox):
         self.type.currentTextChanged.connect(self._on_type_changed)
         type_layout.addWidget(self.type)
         
-        # Bbox annotation widget for cameras
+        # Create containers with fixed heights
+        for layout_item in [name_layout, type_layout]:
+            container = QWidget()
+            container.setLayout(layout_item)
+            container.setFixedHeight(40)
+            self.layout.addWidget(container)
+
+        # Attributes group
+        self.attributes = QGroupBox("Attributes")
+        self.attributes_layout = QVBoxLayout()
+        self.attributes_layout.setSpacing(5)
+        self.attributes_layout.setContentsMargins(10, 10, 10, 10)
+        self.attributes.setLayout(self.attributes_layout)
+        
+        # BBox widget
         self.bbox_widget = QWidget()
         bbox_layout = QHBoxLayout()
         self.collect_bbox = QCheckBox("Enable Bounding Box Collection")
@@ -223,70 +534,55 @@ class SensorWidget(QGroupBox):
         self.collect_bbox.stateChanged.connect(self.configChanged.emit)
         bbox_layout.addWidget(self.collect_bbox)
         self.bbox_widget.setLayout(bbox_layout)
+        self.bbox_widget.setFixedHeight(40)
         self.bbox_widget.setVisible(False)
-        
-        # Transform group
+
+        # Transform widget
         self.transform = TransformWidget()
-        
-        # Attributes group with fixed layout
-        self.attributes = QGroupBox("Attributes")
-        self.attributes_layout = QVBoxLayout()
-        self.attributes_layout.setSpacing(5)  # Set fixed spacing between attributes
-        self.attributes_layout.setContentsMargins(10, 10, 10, 10)  # Set fixed margins
-        self.attributes.setLayout(self.attributes_layout)
-        
-        # Add a widget to contain the attributes with scroll capability
-        attributes_scroll = QScrollArea()
-        attributes_scroll.setWidget(self.attributes)
-        attributes_scroll.setWidgetResizable(True)
-        attributes_scroll.setFixedHeight(150)  # Fixed height for attributes section
         
         # Delete button
         delete_btn = QPushButton("Delete Sensor")
         delete_btn.clicked.connect(lambda: self.deleteRequested.emit(self))
-        
-        # Name field and type selector containers with fixed heights
-        for layout in [name_layout, type_layout]:
-            container = QWidget()
-            container.setLayout(layout)
-            container.setFixedHeight(40)  # Set fixed height for consistent spacing
-            self.layout.addWidget(container)
-        
-        # Bbox widget with fixed height when visible
-        self.bbox_widget.setFixedHeight(40)  # Set fixed height
+
+        # Add widgets in the desired order
         self.layout.addWidget(self.bbox_widget)
-        
-        self.layout.addWidget(attributes_scroll)  # Attributes first
-        self.layout.addWidget(self.transform)   # Transform second
+        self.layout.addWidget(self.attributes)  
+        self.layout.addWidget(self.transform)
         self.layout.addWidget(delete_btn)
         
         self.setLayout(self.layout)
         
-        # Connect transform signal
+        # Connect signals and initialize
         self.transform.configChanged.connect(self.configChanged.emit)
-        
-        # Initialize attributes for default sensor type
         self._on_type_changed(self.type.currentText())
     
     def _on_type_changed(self, sensor_type):
         """Handle sensor type changes"""
-        # Update bbox widget visibility
+        # Update bbox widget visibility - only for RGB cameras
         self.bbox_widget.setVisible(sensor_type == "Camera")
         # Update attributes
         self._update_attributes()
         self.configChanged.emit()
     
-    def _add_camera_attributes(self):
+    def _add_basic_camera_attributes(self):
+        """Add basic camera attributes (for all camera types)"""
         self.attributes_dict = {}
-        attributes = [
-            ("image_size_x", "Image Width", 1, 4096, 1280),
-            ("image_size_y", "Image Height", 1, 4096, 720),
-            ("fov", "FOV", 1, 180, 90)
+        
+        # Basic attributes
+        # basic_label = QLabel("Basic Settings")
+        # basic_label.setStyleSheet("font-weight: bold;")
+        # self.attributes_layout.addWidget(basic_label)
+        
+        basic_attributes = [
+            ("image_size_x", "Image Width", 1, 4096, 800),
+            ("image_size_y", "Image Height", 1, 4096, 600),
+            ("fov", "FOV", 1, 180, 90.0)
         ]
-        for attr_name, label, min_val, max_val, default in attributes:
-            spinbox = self._add_spinbox(label, min_val, max_val, default)
+        
+        for attr_name, label, min_val, max_val, default in basic_attributes:
+            spinbox = self._add_double_spinbox(label, min_val, max_val, default)
             self.attributes_dict[attr_name] = spinbox
-    
+
     def _add_radar_attributes(self):
         self.attributes_dict = {}
         attributes = [
@@ -305,10 +601,18 @@ class SensorWidget(QGroupBox):
             ("channels", "Channels", 1, 128, 64),
             ("range", "Range", 1, 1000, 100),
             ("points_per_second", "Points/Second", 1000, 500000, 250000),
-            ("rotation_frequency", "Rotation Frequency", 1, 100, 20)
+            ("rotation_frequency", "Rotation Frequency", 1, 100, 20.0),
+            ("upper_fov", "Upper FOV", -90, 90, 10.0),
+            ("lower_fov", "Lower FOV", -90, 90, -30.0),
+            ("horizontal_fov", "Horizontal FOV", 1, 360, 360.0),
+            ("atmosphere_attenuation_rate", "Atmosphere Attenuation", 0.0, 1.0, 0.004), 
+            ("dropoff_general_rate", "General Dropoff Rate", 0.0, 1.0, 0.45),
+            ("dropoff_intensity_limit", "Intensity Dropoff Limit", 0.0, 1.0, 0.8),
+            ("dropoff_zero_intensity", "Zero Intensity Dropoff", 0.0, 1.0, 0.4),
+            ("noise_stddev", "Noise StdDev", 0.0, 1.0, 0.0)
         ]
         for attr_name, label, min_val, max_val, default in attributes:
-            spinbox = self._add_spinbox(label, min_val, max_val, default)
+            spinbox = self._add_double_spinbox(label, min_val, max_val, default)
             self.attributes_dict[attr_name] = spinbox
     
     def _add_semantic_lidar_attributes(self):
@@ -368,7 +672,14 @@ class SensorWidget(QGroupBox):
             "blueprint": self.SENSOR_TYPES[sensor_type],
             "attributes": {name: str(spinbox.value()) 
                          for name, spinbox in self.attributes_dict.items()},
-            "transform": self.transform.get_config()
+            "transform": {
+                "location": self.transform.location.get_config(),
+                "rotation": {
+                    "pitch": self.transform.rotation.pitch.value(),
+                    "yaw": self.transform.rotation.yaw.value(),
+                    "roll": self.transform.rotation.roll.value()
+                }
+            }
         }
         
         # Add collect_bbox for cameras only if enabled
@@ -392,8 +703,8 @@ class SensorWidget(QGroupBox):
         self.attributes_dict = {}
         
         # Add new attributes based on sensor type
-        if sensor_type == "Camera":
-            self._add_camera_attributes()
+        if sensor_type in ["Camera", "Semantic Camera", "Instance Camera"]:  
+            self._add_basic_camera_attributes()
         elif sensor_type == "Radar":
             self._add_radar_attributes()
         elif sensor_type == "LIDAR":
@@ -404,37 +715,11 @@ class SensorWidget(QGroupBox):
             self._add_gnss_attributes()
         elif sensor_type == "IMU":
             self._add_imu_attributes()
+            
+        # Update the widget's size after changing attributes
+        self.attributes.adjustSize()
+        self.adjustSize()
     
-    def _add_spinbox(self, label, min_val, max_val, default):
-        """Add a new integer spinbox with label"""
-        container = QWidget()
-        container.setFixedHeight(30)  # Fixed height for each attribute row
-        
-        layout = QHBoxLayout()
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
-        
-        label_widget = QLabel(label)
-        label_widget.setFixedWidth(120)  # Fixed width for labels
-        layout.addWidget(label_widget)
-        
-        spinbox = QSpinBox()
-        spinbox.setRange(min_val, max_val)
-        spinbox.setValue(default)
-        # Disable wheel and set focus policy
-        spinbox.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        spinbox.wheelEvent = lambda event: None
-        # Force dot as decimal separator
-        locale = QLocale('C')  # C locale uses dot as decimal separator
-        locale.setNumberOptions(QLocale.NumberOption.RejectGroupSeparator)
-        spinbox.setLocale(locale)
-        layout.addWidget(spinbox)
-        
-        container.setLayout(layout)
-        self.attributes_layout.addWidget(container)
-        spinbox.valueChanged.connect(self.configChanged.emit)
-        return spinbox
-
     def _add_double_spinbox(self, label, min_val, max_val, default):
         """Add a new float spinbox with label"""
         container = QWidget()
@@ -452,6 +737,36 @@ class SensorWidget(QGroupBox):
         spinbox.setRange(min_val, max_val)
         spinbox.setValue(default)
         spinbox.setDecimals(3)
+        # Disable wheel and set focus policy
+        spinbox.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        spinbox.wheelEvent = lambda event: None
+        # Force dot as decimal separator
+        locale = QLocale('C')  # C locale uses dot as decimal separator
+        locale.setNumberOptions(QLocale.NumberOption.RejectGroupSeparator)
+        spinbox.setLocale(locale)
+        layout.addWidget(spinbox)
+        
+        container.setLayout(layout)
+        self.attributes_layout.addWidget(container)
+        spinbox.valueChanged.connect(self.configChanged.emit)
+        return spinbox
+
+    def _add_spinbox(self, label, min_val, max_val, default):
+        """Add a new integer spinbox with label"""
+        container = QWidget()
+        container.setFixedHeight(30)  # Fixed height for each attribute row
+        
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(5)
+        
+        label_widget = QLabel(label)
+        label_widget.setFixedWidth(120)  # Fixed width for labels
+        layout.addWidget(label_widget)
+        
+        spinbox = QSpinBox()
+        spinbox.setRange(min_val, max_val)
+        spinbox.setValue(default)
         # Disable wheel and set focus policy
         spinbox.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         spinbox.wheelEvent = lambda event: None
@@ -514,9 +829,18 @@ class RotationWidget(QGroupBox):
         self.yaw = QDoubleSpinBox()
         self.roll = QDoubleSpinBox()
         
+        # Extend range to allow full rotation
+        self.pitch.setRange(-360, 360)
+        self.yaw.setRange(-360, 360)  # Allow full rotation range
+        self.roll.setRange(-360, 360)
+        
+        # Set default values
         for spinbox in [self.pitch, self.yaw, self.roll]:
-            spinbox.setRange(-180, 180)
             spinbox.setValue(0)
+            spinbox.setDecimals(1)  # Show one decimal place for precision
+            # Disable wheel and set focus policy
+            spinbox.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+            spinbox.wheelEvent = lambda event: None
         
         layout.addWidget(QLabel("Pitch:"))
         layout.addWidget(self.pitch)
@@ -566,12 +890,17 @@ class MainWindow(QMainWindow):
         
         # Add save, run and visualize buttons
         button_layout = QHBoxLayout()
+        launch_btn = QPushButton("Launch CARLA")
         save_btn = QPushButton("Save Configuration")
         run_btn = QPushButton("Run Simulation")
         visualize_btn = QPushButton("Visualize Simulation")
+        
+        launch_btn.clicked.connect(self.launch_carla)
         save_btn.clicked.connect(self.save_config)
         run_btn.clicked.connect(self.run_simulation)
         visualize_btn.clicked.connect(self.visualize_simulation)
+        
+        button_layout.addWidget(launch_btn)
         button_layout.addWidget(save_btn)
         button_layout.addWidget(run_btn)
         button_layout.addWidget(visualize_btn)
@@ -692,7 +1021,15 @@ class MainWindow(QMainWindow):
             # Get results (non-blocking)
             stdout, stderr = process.communicate()
             
-            if process.returncode != 0:
+            if process.returncode == 0:
+                # Show success message
+                QMessageBox.information(
+                    self,
+                    "Simulation Complete",
+                    "The simulation has finished successfully!\n\n" +
+                    "Data has been saved to the output directory."
+                )
+            else:
                 raise RuntimeError(f"Simulation failed:\n{stderr}")
             
         except Exception as e:
@@ -764,6 +1101,40 @@ class MainWindow(QMainWindow):
                 self, 
                 "Error", 
                 f"Failed to start visualization: {str(e)}"
+            )
+    
+    def launch_carla(self):
+        """Launch CARLA server using relative path"""
+        try:
+            # Get the path to CARLA by going up from current directory
+            current_dir = Path(os.path.abspath(__file__))  # Get path to current script
+            carla_root = current_dir.parents[2]  # Go up 3 levels to CARLA root
+            carla_exe = carla_root / "CarlaUnreal.exe"
+            
+            if not carla_exe.exists():
+                raise FileNotFoundError(f"CARLA executable not found at: {carla_exe}")
+            
+            # Launch CARLA in a new process
+            subprocess.Popen(
+                str(carla_exe),
+                cwd=str(carla_root),
+                creationflags=subprocess.CREATE_NEW_CONSOLE
+            )
+            
+            # Show a message to wait for CARLA to start
+            QMessageBox.information(
+                self,
+                "CARLA Starting",
+                "CARLA is starting...\n\n" +
+                "Please wait for the simulator to fully load before running the simulation."
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to launch CARLA: {str(e)}\n\n" +
+                "Please make sure CARLA is correctly installed."
             )
 
 def main():

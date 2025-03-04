@@ -27,19 +27,42 @@ class FlexibleDataPlayer:
         self.sensors = {}
         for sensor_cfg in sensors_config:
             sname = sensor_cfg["name"]
-            stype = sensor_cfg["type"].lower()
-            # Définir le pattern en fonction du type
-            pattern = "*.png" if stype == "camera" else "*.npy"
+            stype = sensor_cfg["type"].lower().replace(" ", "_")
+            blueprint = sensor_cfg["blueprint"].lower()  # Normalize blueprint string
+            
+            # Define pattern and actual type based on blueprint
+            if "semantic_segmentation" in blueprint:
+                pattern = "*.png"
+                actual_type = "semantic_camera"
+            elif "instance_segmentation" in blueprint:
+                pattern = "*.png"
+                actual_type = "instance_camera"
+            elif "camera" in blueprint and "rgb" in blueprint:
+                pattern = "*.png"
+                actual_type = "camera"
+            elif "semantic" in blueprint and "lidar" in blueprint:
+                pattern = "*.npy"
+                actual_type = "semantic_lidar"
+            elif "radar" in blueprint:
+                pattern = "*.npy"
+                actual_type = "radar"
+            elif "lidar" in blueprint:
+                pattern = "*.npy"
+                actual_type = "lidar"
+            else:
+                pattern = "*.json"
+                actual_type = stype
+
             sensor_folder = self.data_dir / sname
             if sensor_folder.exists() and sensor_folder.is_dir():
                 files = sorted(list(sensor_folder.glob(pattern)))
                 if files:
                     self.sensors[sname] = {
-                        "type": stype,
+                        "type": actual_type,
                         "path": sensor_folder,
                         "files": files,
                         "last_valid": None,
-                        "name": sname  # Ajout du nom du capteur dans le dictionnaire
+                        "name": sname
                     }
         if not self.sensors:
             raise RuntimeError("No sensor data found using configuration!")
@@ -279,36 +302,120 @@ class FlexibleDataPlayer:
         except Exception as e:
             print(f"Error processing semantic lidar file {file_path.name}: {e}")
             return pygame.Surface(self.cell_size)
+    
+    def process_imu(self, file_path):
+        """Process IMU data for visualization"""
+        try:
+            with open(file_path) as f:
+                data = json.load(f)
+            
+            # Create a surface to display IMU data
+            surface = pygame.Surface(self.cell_size)
+            surface.fill((0, 0, 0))  # Black background
+            
+            # Calculate font size based on cell height
+            font_size = min(32, self.cell_size[1] // 12)
+            font = pygame.font.Font(None, font_size)
+            title_font = pygame.font.Font(None, font_size + 8)
+            
+            # Prepare text lines without tuples
+            lines = []
+            lines.append(("", font, (255, 255, 255)))
+            lines.append(("Accelerometer (m/s²)", title_font, (255, 255, 0)))
+            lines.append((f"X: {data['accelerometer']['x']:8.3f}, Y: {data['accelerometer']['y']:8.3f}, Z: {data['accelerometer']['z']:8.3f}", font, (255, 255, 255)))
+            lines.append(("", font, (255, 255, 255)))
+            lines.append(("Gyroscope (rad/s)", title_font, (255, 255, 0)))
+            lines.append((f"X: {data['gyroscope']['x']:8.3f}, Y: {data['gyroscope']['y']:8.3f}, Z: {data['gyroscope']['z']:8.3f}", font, (255, 255, 255)))
+            lines.append(("", font, (255, 255, 255)))
+            lines.append(("Compass", title_font, (255, 255, 0)))
+            lines.append((f"{data['compass']:5.1f}°", font, (255, 255, 255)))
+            
+            # Calculate total height and starting position
+            line_height = font_size + 4
+            total_height = len(lines) * line_height
+            start_y = (self.cell_size[1] - total_height) // 2
+            
+            # Render text
+            for i, (text, font_obj, color) in enumerate(lines):
+                if text:  # Only render non-empty lines
+                    text_surface = font_obj.render(text, True, color)
+                    text_rect = text_surface.get_rect(center=(self.cell_size[0]/2, start_y + i * line_height))
+                    surface.blit(text_surface, text_rect)
+            
+            return surface
+            
+        except Exception as e:
+            print(f"Error processing IMU file {file_path}: {e}")
+            return pygame.Surface(self.cell_size)
+    
+    def process_gnss(self, file_path):
+        """Process GNSS data for visualization"""
+        try:
+            with open(file_path) as f:
+                data = json.load(f)
+            
+            # Create a surface to display GNSS data
+            surface = pygame.Surface(self.cell_size)
+            surface.fill((0, 0, 0))  # Black background
+            
+            # Use same font sizes as IMU
+            font_size = min(32, self.cell_size[1] // 12)
+            font = pygame.font.Font(None, font_size)
+            title_font = pygame.font.Font(None, font_size + 8)
+            
+            # Prepare text lines
+            lines = []
+            lines.append(("", font, (255, 255, 255)))
+            lines.append(("Position", title_font, (255, 255, 0)))
+            lines.append((f"Latitude:  {data['latitude']:11.6f}°", font, (255, 255, 255)))
+            lines.append((f"Longitude: {data['longitude']:11.6f}°", font, (255, 255, 255)))
+            lines.append((f"Altitude:  {data['altitude']:11.2f}m", font, (255, 255, 255)))
+            
+            # Calculate total height and starting position
+            line_height = font_size + 4
+            total_height = len(lines) * line_height
+            start_y = (self.cell_size[1] - total_height) // 2
+            
+            # Render text
+            for i, (text, font_obj, color) in enumerate(lines):
+                if text:  # Only render non-empty lines
+                    text_surface = font_obj.render(text, True, color)
+                    text_rect = text_surface.get_rect(center=(self.cell_size[0]/2, start_y + i * line_height))
+                    surface.blit(text_surface, text_rect)
+            
+            return surface
+            
+        except Exception as e:
+            print(f"Error processing GNSS file {file_path}: {e}")
+            return pygame.Surface(self.cell_size)
 
     def process_sensor(self, sensor, timestamp):
         """Process sensor data for visualization"""
-        # Look for a file whose stem equals the timestamp
         file = next((f for f in sensor["files"] if int(f.stem) == timestamp), None)
-        
-        # Initialize processed variable
-        processed = None
         
         if file:
             try:
-                if sensor["type"] == "camera":
-                    processed = self.process_camera(file, sensor["name"])
-                elif sensor["type"] == "radar":
-                    processed = self.process_radar(file)
-                elif sensor["type"] == "lidar":
-                    if "semantic" in sensor["name"]:
-                        processed = self.process_semantic_lidar(file)
-                    else:
-                        processed = self.process_lidar(file)
+                sensor_type = sensor["type"]
+                if sensor_type == "imu":
+                    return self.process_imu(file)
+                elif sensor_type == "gnss":
+                    return self.process_gnss(file)
+                elif sensor_type == "camera":
+                    return self.process_camera(file, sensor["name"])
+                elif sensor_type == "semantic_camera":
+                    return pygame.image.load(str(file))  # Load semantic segmentation directly
+                elif sensor_type == "instance_camera":
+                    return pygame.image.load(str(file))  # Load instance segmentation directly
+                elif sensor_type == "radar":
+                    return self.process_radar(file)
+                elif sensor_type == "semantic_lidar":
+                    return self.process_semantic_lidar(file)
+                elif sensor_type == "lidar":
+                    return self.process_lidar(file)
                 
-                # Only update last_valid if we successfully processed the data
-                if processed is not None:
-                    sensor["last_valid"] = processed
-                    return processed
-                    
             except Exception as e:
                 print(f"Error processing {sensor['name']} at timestamp {timestamp}: {e}")
         
-        # Use last valid if available, otherwise return blank surface
         return sensor["last_valid"] if sensor["last_valid"] is not None else pygame.Surface(self.cell_size)
 
     def run(self):

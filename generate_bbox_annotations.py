@@ -72,8 +72,8 @@ def get_camera_config(camera_name, config):
     for sensor in config["sensors"]:
         if sensor["name"] == camera_name and sensor["type"] == "camera":
             return {
-                "width": int(sensor["attributes"]["image_size_x"]),
-                "height": int(sensor["attributes"]["image_size_y"]),
+                "width": int(float(sensor["attributes"]["image_size_x"])),
+                "height": int(float(sensor["attributes"]["image_size_y"])),
                 "fov": float(sensor["attributes"].get("fov", 90)) 
             }
     return None
@@ -86,12 +86,15 @@ def process_scene(scene_path):
     
     print(f"Processing scene: {scene_path}")
     
-    # Get all camera folders
+    # Get all camera folders by checking config
     camera_folders = []
-    for folder in os.listdir(scene_path):
-        folder_path = os.path.join(scene_path, folder)
-        if os.path.isdir(folder_path) and folder.startswith("camera_"):
-            camera_folders.append(folder_path)
+    for sensor in config["sensors"]:
+        if (sensor["type"] == "camera" and 
+            sensor["blueprint"] == "sensor.camera.rgb" and 
+            sensor.get("collect_bbox", False)):
+            camera_path = os.path.join(scene_path, sensor["name"])
+            if os.path.isdir(camera_path):
+                camera_folders.append(camera_path)
     
     # Process each camera
     for camera_folder in camera_folders:

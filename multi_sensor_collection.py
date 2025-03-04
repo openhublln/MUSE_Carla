@@ -67,13 +67,23 @@ def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=Non
             img_filename = f"{timestamp}.png"
             img_path = os.path.join(sensor_folder, img_filename)
             
-            if "semantic" in sensor_name:
+            # Get the sensor's blueprint ID from the config
+            blueprint_id = None
+            with open('config.yml', 'r') as f:
+                config = yaml.safe_load(f)
+                for sensor in config["sensors"]:
+                    if sensor["name"] == sensor_name:
+                        blueprint_id = sensor["blueprint"]
+                        break
+            
+            # Use blueprint ID to determine the type of camera
+            if blueprint_id == "sensor.camera.semantic_segmentation":
                 sensor_data.save_to_disk(img_path, carla.ColorConverter.CityScapesPalette)
-            elif "instance" in sensor_name:
+            elif blueprint_id == "sensor.camera.instance_segmentation":
                 sensor_data.save_to_disk(img_path)
             else:
-                sensor_data.save_to_disk(img_path)  
-        
+                sensor_data.save_to_disk(img_path)
+
         elif isinstance(sensor_data, carla.SemanticLidarMeasurement):
             lidar_filename = os.path.join(sensor_folder, f"{timestamp}.ply")
             # Save as PLY file for compatibility with visualization tools

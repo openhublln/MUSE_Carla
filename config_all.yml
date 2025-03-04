@@ -9,7 +9,7 @@ simulation:
     car_lights_on: true
     seed: null  
 sensors:
-  - name: "camera"
+  - name: "camera_Front"
     type: "camera"
     blueprint: "sensor.camera.rgb"
     attributes:
@@ -17,10 +17,10 @@ sensors:
       image_size_y: "720"
       fov: "90"
     transform:
-      location: {x: 0, y: 0, z: 2.4}
+      location: {x: 1, y: 0, z: 2.4}
       rotation: {yaw: 0}
     collect_bbox: true 
-  - name: "camera_2"
+  - name: "camera_Back"
     type: "camera"
     blueprint: "sensor.camera.rgb"
     attributes:
@@ -31,27 +31,27 @@ sensors:
       location: {x: -1, y: 0, z: 2.4}
       rotation: {yaw: 180}
     collect_bbox: true
-  - name: "camera_3"
+  - name: "camera_FrontRight"
     type: "camera"
     blueprint: "sensor.camera.rgb"
     attributes:
       image_size_x: "1280"
       image_size_y: "720"
     transform:
-      location: {x: 0, y: -0.5, z: 2.4}
+      location: {x: 1, y: -0.5, z: 2.4}
       rotation: {yaw: 45}
     collect_bbox: true
-  - name: "camera_4"
+  - name: "camera_FrontLeft"
     type: "camera"
     blueprint: "sensor.camera.rgb"
     attributes:
       image_size_x: "1280"
       image_size_y: "720"
     transform:
-      location: {x: 0, y: 0.5, z: 2.4}
+      location: {x: 1, y: 0.5, z: 2.4}
       rotation: {yaw: -45}
     collect_bbox: true
-  - name: "camera_5"
+  - name: "camera_BackRight"
     type: "camera"
     blueprint: "sensor.camera.rgb"
     attributes:
@@ -61,7 +61,7 @@ sensors:
       location: {x: 0, y: 0.5, z: 2.4}
       rotation: {yaw: -225}
     collect_bbox: true
-  - name: "camera_6"
+  - name: "camera_BackLeft"
     type: "camera"
     blueprint: "sensor.camera.rgb"
     attributes:
@@ -89,7 +89,7 @@ sensors:
     transform:
       location: {x: 0, y: 0, z: 2.4}
       rotation: {yaw: 0}
-  - name: "radar"
+  - name: "radar_Front"
     type: "radar"
     blueprint: "sensor.other.radar"
     attributes:
@@ -98,8 +98,52 @@ sensors:
       points_per_second: "5000"
       range: "250"
     transform:
-      location: {x: 3, y: 0, z: 2}
+      location: {x: 3, y: 0, z: 1.5}
       rotation: {pitch: 5, yaw: 0, roll: 0}
+  - name: "radar_FrontRight"
+    type: "radar"
+    blueprint: "sensor.other.radar"
+    attributes:
+      horizontal_fov: "90"
+      vertical_fov: "10"
+      points_per_second: "5000"
+      range: "250"
+    transform:
+      location: {x: 2, y: -0.5, z: 1.5}
+      rotation: {pitch: 5, yaw: 90, roll: 0}
+  - name: "radar_FrontLeft"
+    type: "radar"
+    blueprint: "sensor.other.radar"
+    attributes:
+      horizontal_fov: "90"
+      vertical_fov: "10"
+      points_per_second: "5000"
+      range: "250"
+    transform:
+      location: {x: 2, y: 0.5, z: 15}
+      rotation: {pitch: 5, yaw: -90, roll: 0}
+  - name: "radar_BackLeft"
+    type: "radar"
+    blueprint: "sensor.other.radar"
+    attributes:
+      horizontal_fov: "90"
+      vertical_fov: "10"
+      points_per_second: "5000"
+      range: "250"
+    transform:
+      location: {x: -1.5, y: 0.5, z: 1.5}
+      rotation: {pitch: 5, yaw: 180, roll: 0}
+  - name: "radar_BackRight"
+    type: "radar"
+    blueprint: "sensor.other.radar"
+    attributes:
+      horizontal_fov: "90"
+      vertical_fov: "10"
+      points_per_second: "5000"
+      range: "250"
+    transform:
+      location: {x: -1.5, y: -0.5, z: 1.5}
+      rotation: {pitch: 5, yaw: 180, roll: 0}
   - name: "lidar"
     type: "lidar"
     blueprint: "sensor.lidar.ray_cast"
