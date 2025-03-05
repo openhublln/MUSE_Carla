@@ -1,95 +1,103 @@
 # CARLA Multi-Sensor Data Collection Pipeline
 
-A comprehensive pipeline for generating and visualizing synthetic data from the CARLA simulator. This tool enables collecting synchronized data from multiple sensors (cameras, LiDAR, semantic LiDAR, radar) in simulated scenes and provides interactive visualization tools for data analysis. Perfect for researchers and developers testing perception algorithms and sensor fusion in a controlled, repeatable environment.
+The CARLA Multi-Sensor Data Collection Pipeline is an end-to-end framework designed to simulate, capture, and analyze multi-modal sensor data in realistic urban environments using the CARLA simulator. This project provides a modular and highly configurable solution for autonomous vehicle research and development.
 
-## Requirements
-- CARLA 0.10.0
-- Python 3.7+
-- Required Python packages:
-  - numpy<2.0,>=1.24.4
-  - opencv-python
-  - open3d (Python ≤ 3.11)
-  - Pillow
-  - matplotlib
-  - pygame
-  - PyYAML
+## Overview
+
+The pipeline integrates several key components:
+
+- **Flexible Configuration Management:**  
+  Define simulation parameters and sensor specifications via a centralized YAML file or interactively through a graphical configuration editor.
+- **Synchronized Data Acquisition:**  
+  Attach a variety of sensors (RGB cameras, LiDAR, radar, GNSS, IMU) to an ego vehicle in CARLA. A tick-based synchronization mechanism ensures that all sensor data are temporally aligned, facilitating sensor fusion and perception tasks.
+- **Automated Annotation Generation:**  
+  Automatically generates bounding box annotations from instance segmentation images, streamlining the transition from raw data to training-ready datasets.
+- **Interactive Replay and Visualization:**  
+  A replay tool allows users to inspect multi-modal sensor data in a grid layout. Overlaid annotations and sensor metadata provide an interactive way to validate and refine simulation parameters.
+
+## Architecture
+
+The pipeline is divided into several main modules:
+1. **Configuration Management:**  
+   - **YAML Configuration File (`config.yml`):**  
+     Centralized source for simulation and sensor settings.
+   - **Graphical Configuration Editor (`config_editor.py`):**  
+     A PyQt6-based tool for dynamically editing and previewing configuration parameters.
+2. **Data Collection and Processing:**  
+   - **Data Collection (`multi_sensor_collection.py`):**  
+     Initializes simulation scenes, sets up sensor folders, attaches sensors with asynchronous callbacks, and ensures temporal synchronization.
+   - **Annotation Generation (`generate_bbox_annotations.py`):**  
+     Converts instance segmentation images to bounding box annotations stored in JSON format.
+3. **Replay Tool:**  
+   - **Multi-Sensor Replay (`multi_sensor_replay.py`):**  
+     Loads synchronized sensor data and displays them in a grid layout with interactive controls for frame-by-frame analysis.
 
 ## Features
-- Multi-sensor synchronized data collection:
-  - RGB Cameras with automatic bounding box generation
-  - LiDAR point clouds
-  - Semantic LiDAR with CityScapes color mapping
-  - Radar with intensity simulation
-- Vehicle detection for multiple types:
-  - Cars
-  - Trucks
-  - Buses
-  - Motorcycles
-- Configurable simulation parameters:
-  - Weather conditions (preset or custom)
-  - Traffic density
-  - Scene duration
-  - Sensor positioning
-- Interactive visualization:
-  - Multi-sensor synchronized playback
-  - Grid-based display
-  - Real-time data inspection
-  - Aspect ratio preservation
 
-## Pipeline Architecture
-### 1. Configuration (config.yml)
-- Centralized configuration for all simulation parameters
-- Sensor setup (type, position, attributes)
-- Scene parameters (duration, count)
-- Weather and traffic settings
-- Easy to modify without changing code
+- **Dual-Mode Configuration:**  
+  Supports both text-based YAML configuration and a user-friendly graphical editor for easy parameter tuning.
+- **Sensor Diversity:**  
+  Supports cameras, LiDAR, radar, GNSS, and IMU sensors with customizable attributes and transformation settings.
+- **Temporal Synchronization:**  
+  Ensures that sensor data across modalities are aligned by using a tick-based mechanism synchronized with CARLA’s physics engine.
+- **Automated Post-Processing:**  
+  Provides built-in routines for generating training-ready bounding box annotations from segmentation images.
+- **Visualization and Replay:**  
+  Offers an interactive replay tool that overlays annotations, timestamps, and sensor names to facilitate data validation and debugging.
 
-### 2. Data Collection (multi_sensor_collection.py)
-- CARLA server connection and synchronous mode setup
-- Scene and sensor folder creation
-- Vehicle spawning and sensor attachment
-- Synchronized data collection
-- Data formats:
-  - Cameras: PNG
-  - LiDAR: NPY (x, y, z, intensity)
-  - Semantic LiDAR: PLY + NPY (with semantic tags)
-  - Radar: NPY (depth, altitude, azimuth, velocity, intensity)
-  - Bounding Boxes: JSON
+## Installation
 
-### 3. Data Visualization (multi_sensor_replay.py)
-- Configuration-based sensor loading
-- Common timestamp synchronization
-- Grid-based visualization
-- Interactive controls:
-  - Space: Play/Pause
-  - Left/Right arrows: Frame navigation
-  - ESC: Exit
+### System Requirements
 
-## Data Organization
-```
-_out/
-  └── scene_X/
-      ├── camera_1/
-      ├── instance_camera_1/
-      ├── lidar/
-      ├── semantic_lidar/
-      ├── radar/
-      └── ...
-```
+- **CARLA Simulator:** v0.10.0  
+- **Python:** 3.7+
+- **Python Dependencies**
+    - `numpy` (>=1.24.4, <2.0)
+    - `opencv-python`
+    - `PyYAML`
+    - `pygame`
+    - `matplotlib`
+    - `PyQt6`
+    - `Pillow`
+    - `open3d` (for Python ≤ 3.11)
 
+### Setup Steps
 
-## Usage Examples
-Basic data collection:
-```
-python multi_sensor_collection.py
-```
+1. **Install CARLA Simulator:**  
+   Follow the [quick start guide](https://carla-ue5.readthedocs.io/en/latest/start_quickstart/) for CARLA v0.10.0.
+2. **Clone the Repository:**  
+   Create a folder named `muse` inside the `Carla-0.10.0-Win64-Shipping/PythonAPI` directory and clone this project from GitHub.
+3. **Setup Python Environment:**  
+   Create and activate a Python virtual environment, then install the required packages using `pip`.
+4. **Run the Configuration Editor:**  
+   Execute `config_editor.py` to interactively set your simulation and sensor parameters.
 
-Visualize specific scene:
-```
-python multi_sensor_replay.py scene_2
-```
+## Usage
 
-Modify sensor configuration: Edit config.yml to add/remove sensors or change their parameters.
+1. **Configuration:**  
+   Edit simulation parameters, sensor specifications, and traffic settings either directly in `config.yml` or via the graphical editor. Changes are reflected in a live YAML preview.
+2. **Simulation and Data Collection:**  
+   - Launch the CARLA simulation.
+   - The data collection module (`multi_sensor_collection.py`) initializes the scene, attaches sensors, and synchronizes data capture.
+   - Sensor data is saved in a structured directory layout for each simulation scene.
+3. **Automated Annotation:**  
+   After simulation, bounding box annotations are automatically generated from instance segmentation images using the `generate_bbox_annotations.py` module.
+4. **Replay and Verification:**  
+   Use the replay tool (`multi_sensor_replay.py`) to inspect multi-modal sensor data. Navigate through frames, view overlaid annotations, and verify synchronization across sensors.
+
+## Limitations and Future Improvements
+
+- **Bounding Box Annotation:**  
+  The current annotation process requires capturing two images per camera, which may affect performance when multiple sensors are recording simultaneously.
+- **Ego Vehicle Handling:**  
+  Automatic bounding box generation for the ego vehicle can degrade training data quality. A fix is planned for future updates.
+- **Fixed Frame Rate:**  
+  All sensors operate at a fixed frame rate (20Hz). Future releases aim to support individual sensor frame rate configuration.
+- **Output Standardization:**  
+  The output format does not yet conform to standards like NuScenes or KITTI. Future work will focus on standardization for improved interoperability.
+- **Environmental Constraints:**  
+  Currently, the simulation supports a single map and lacks weather variations (as per CARLA v0.10.0 limitations). Future enhancements may include additional maps and dynamic weather simulation.
 
 ## License
+
 This project is licensed under the terms of the MIT license.
