@@ -122,7 +122,7 @@ class SensorTab(QWidget):
     SENSOR_PRESET_ORDER = ["Custom Sensor"] + [
         "Camera_Front", "Camera_Back", "Camera_FrontRight", "Camera_FrontLeft", 
         "Camera_BackRight", "Camera_BackLeft", "Radar_Front", "Radar_FrontRight", 
-        "Radar_FrontLeft", "Radar_BackLeft", "Radar_BackRight", "Lidar", 
+        "Radar_FrontLeft", "Radar_BackRight", "Radar_BackLeft", "Lidar", 
         "Semantic_Lidar", "GNSS", "IMU"
     ]
     
@@ -149,7 +149,7 @@ class SensorTab(QWidget):
                 "fov": 90.0,
             },
             "transform": {
-                "location": {"x": 1, "y": 0, "z": 2.4},
+                "location": {"x": 0.4, "y": 0, "z": 2.4},
                 "rotation": {"yaw": 0}
             },
             "collect_bbox": True
@@ -175,7 +175,7 @@ class SensorTab(QWidget):
                 "fov": 90.0,
             },
             "transform": {
-                "location": {"x": 1, "y": -0.5, "z": 2.4},
+                "location": {"x": 0.4, "y": 0.3, "z": 2.4},
                 "rotation": {"yaw": 45}
             },
             "collect_bbox": True
@@ -188,7 +188,7 @@ class SensorTab(QWidget):
                 "fov": 90.0,
             },
             "transform": {
-                "location": {"x": 1, "y": 0.5, "z": 2.4},
+                "location": {"x": 0.4, "y": -0.3, "z": 2.4},
                 "rotation": {"yaw": -45}
             },
             "collect_bbox": True
@@ -201,7 +201,7 @@ class SensorTab(QWidget):
                 "fov": 90.0,
             },
             "transform": {
-                "location": {"x": 0, "y": 0.5, "z": 2.4},
+                "location": {"x": -0.3, "y": 0.5, "z": 2.4},
                 "rotation": {"yaw": -225} 
             },
             "collect_bbox": True
@@ -214,7 +214,7 @@ class SensorTab(QWidget):
                 "fov": 90.0,
             },
             "transform": {
-                "location": {"x": 0, "y": -0.5, "z": 2.4},
+                "location": {"x": -0.3, "y": -0.5, "z": 2.4},
                 "rotation": {"yaw": 225}  
             },
             "collect_bbox": True
@@ -228,7 +228,7 @@ class SensorTab(QWidget):
                 "range": 250
             },
             "transform": {
-                "location": {"x": 3, "y": 0, "z": 1.5},
+                "location": {"x": 2.5, "y": 0, "z": 1},
                 "rotation": {"pitch": 5, "yaw": 0, "roll": 0}
             }
         },
@@ -241,7 +241,7 @@ class SensorTab(QWidget):
                 "range": 250
             },
             "transform": {
-                "location": {"x": 2, "y": -0.5, "z": 1.5},
+                "location": {"x": 1.5, "y": 1, "z": 1},
                 "rotation": {"pitch": 5, "yaw": 90, "roll": 0}
             }
         },
@@ -254,21 +254,8 @@ class SensorTab(QWidget):
                 "range": 250
             },
             "transform": {
-                "location": {"x": 2, "y": 0.5, "z": 1.5},
+                "location": {"x": 1.5, "y": -1, "z": 1},
                 "rotation": {"pitch": 5, "yaw": -90, "roll": 0}
-            }
-        },
-        "Radar_BackLeft": {
-            "type": "Radar",
-            "attributes": {
-                "horizontal_fov": 90,
-                "vertical_fov": 10,
-                "points_per_second": 5000,
-                "range": 250
-            },
-            "transform": {
-                "location": {"x": -1.5, "y": 0.5, "z": 1.5},
-                "rotation": {"pitch": 5, "yaw": 180, "roll": 0}
             }
         },
         "Radar_BackRight": {
@@ -280,7 +267,20 @@ class SensorTab(QWidget):
                 "range": 250
             },
             "transform": {
-                "location": {"x": -1.5, "y": -0.5, "z": 1.5},
+                "location": {"x": -2.5, "y": 0.5, "z": 1},
+                "rotation": {"pitch": 5, "yaw": 180, "roll": 0}
+            }
+        },        
+        "Radar_BackLeft": {
+            "type": "Radar",
+            "attributes": {
+                "horizontal_fov": 90,
+                "vertical_fov": 10,
+                "points_per_second": 5000,
+                "range": 250
+            },
+            "transform": {
+                "location": {"x": -2.5, "y": -0.5, "z": 1},
                 "rotation": {"pitch": 5, "yaw": 180, "roll": 0}
             }
         },
@@ -302,7 +302,7 @@ class SensorTab(QWidget):
                 "noise_stddev": 0.0
             },
             "transform": {
-                "location": {"x": 0, "y": 0, "z": 2.4},
+                "location": {"x": -0.3, "y": 0, "z": 2.4},
                 "rotation": {"yaw": 90}
             }
         },
@@ -318,7 +318,7 @@ class SensorTab(QWidget):
                 "horizontal_fov": 360
             },
             "transform": {
-                "location": {"x": 0, "y": 0, "z": 2.4},
+                "location": {"x": -0.3, "y": 0, "z": 2.4},
                 "rotation": {"yaw": 90}
             }
         },
@@ -333,7 +333,7 @@ class SensorTab(QWidget):
                 "noise_lon_stddev": 0.1
             },
             "transform": {
-                "location": {"x": 0, "y": 0, "z": 2.4},
+                "location": {"x": -1, "y": 0, "z": 2.4},
                 "rotation": {"pitch": 0, "yaw": 0, "roll": 0}
             }
         },
@@ -351,7 +351,7 @@ class SensorTab(QWidget):
                 "noise_gyro_bias_z": 0.0
             },
             "transform": {
-                "location": {"x": 0, "y": 0, "z": 0},
+                "location": {"x": -1, "y": 0, "z": 2.4},
                 "rotation": {"pitch": 0, "yaw": 0, "roll": 0}
             }
         }
@@ -373,7 +373,7 @@ class SensorTab(QWidget):
         
         # Single "Add Sensor" button
         add_btn = QPushButton("Add Sensor")
-        add_btn.clicked.connect(self._add_preset)  # Now using _add_preset for all sensors
+        add_btn.clicked.connect(self._add_preset)  
         button_layout.addWidget(add_btn)
         
         button_container.setLayout(button_layout)
