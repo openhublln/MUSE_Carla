@@ -440,7 +440,8 @@ def main():
         traffic_config = sim_config.get("traffic", {}) 
 
         num_scenes = sim_config["num_scenes"]
-        ticks_per_scene = sim_config["ticks_per_scene"]
+        seconds_per_scene = sim_config["seconds_per_scene"]
+        ticks_per_scene = seconds_per_scene * 20  # 20Hz simulation
         base_save_path = sim_config["base_save_path"]
 
         # Set random seed if specified

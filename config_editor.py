@@ -26,8 +26,8 @@ class SimulationTab(QWidget):
         num_scenes_container = self._create_spinbox("Number of Scenes:", 1, 1000, 1)
         self.num_scenes = num_scenes_container.findChild(QSpinBox)
         
-        ticks_container = self._create_spinbox("Ticks per Scene:", 1, 1000, 20)
-        self.ticks_per_scene = ticks_container.findChild(QSpinBox)
+        seconds_container = self._create_spinbox("Seconds per Scene:", 1, 1000, 20)
+        self.seconds_per_scene = seconds_container.findChild(QSpinBox)
         
         self.base_save_path = self._create_path_selector("Base Save Path:", "./_out")
         
@@ -52,7 +52,7 @@ class SimulationTab(QWidget):
         traffic_group.setLayout(traffic_layout)
         
         # Add all widgets to main layout
-        for widget in [num_scenes_container, ticks_container, 
+        for widget in [num_scenes_container, seconds_container, 
                       self.base_save_path, traffic_group]:
             sim_layout.addWidget(widget)
         
@@ -62,7 +62,7 @@ class SimulationTab(QWidget):
         self.setLayout(self.layout)
         
         # Connect signals
-        for spinbox in [self.num_scenes, self.ticks_per_scene, 
+        for spinbox in [self.num_scenes, self.seconds_per_scene, 
                        self.num_vehicles, self.num_pedestrians]:
             spinbox.valueChanged.connect(self.configChanged.emit)
         for checkbox in [self.safe_spawn, self.car_lights_on]:
@@ -102,7 +102,7 @@ class SimulationTab(QWidget):
         return {
             "simulation": {
                 "num_scenes": self.num_scenes.value(),
-                "ticks_per_scene": self.ticks_per_scene.value(),
+                "seconds_per_scene": self.seconds_per_scene.value(),
                 "base_save_path": self.path_edit.text(),
                 "traffic": {
                     "num_vehicles": self.num_vehicles.value(),
