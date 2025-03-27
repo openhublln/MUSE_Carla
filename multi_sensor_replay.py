@@ -12,8 +12,9 @@ import json
 
 class FlexibleDataPlayer:
     """ Flexible player to support various sensors (camera, radar, lidar) """
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, annotation_type="2d"):
         self.data_dir = Path(data_dir)
+        self.annotation_type = annotation_type  # new parameter for annotation type ("2d" or "3d")
         if not self.data_dir.exists():
             raise RuntimeError(f"Data directory does not exist: {self.data_dir}")
         print(f"Initializing player with data directory: {self.data_dir}")
@@ -143,35 +144,80 @@ class FlexibleDataPlayer:
         }
 
     def process_camera(self, file_path, sensor_name):
-        """Process camera image and overlay bounding boxes if available"""
         try:
             # Charger l'image
             img = pygame.image.load(str(file_path))
             
-            # Chercher le fichier bbox correspondant
-            bbox_file = str(file_path).replace('.png', '_bbox.json')
+            # Choose annotation file based on annotation_type setting
+            if self.annotation_type == "3d":
+                bbox_file = str(file_path).replace('.png', '_3dbbox.json')
+            else:
+                bbox_file = str(file_path).replace('.png', '_bbox.json')
+                
             if os.path.exists(bbox_file):
                 try:
                     with open(bbox_file, 'r') as f:
                         bbox_data = json.load(f)
-                        
-                    # Créer une surface pygame à partir de l'image
-                    surface = pygame.Surface(img.get_size(), pygame.SRCALPHA)
-                    surface.blit(img, (0,0))
                     
-                    # Dessiner les bounding boxes
-                    for bbox in bbox_data['bounding_boxes']:
-                        x, y, w, h = bbox['bbox']
-                        # Dessiner uniquement le contour du rectangle en rouge
-                        pygame.draw.rect(surface, (255, 0, 0), (x, y, w, h), 2)
+                    # Determine bounding boxes list from loaded data
+                    if isinstance(bbox_data, dict):
+                        boxes = bbox_data.get('bounding_boxes', [])
+                    else:
+                        boxes = bbox_data
                         
-                        # Afficher la distance si disponible
-                        if 'distance' in bbox:
-                            font = pygame.font.Font(None, 24)
-                            dist_text = font.render(f"{bbox['distance']:.1f}m", True, (255, 255, 255))
-                            surface.blit(dist_text, (x, y-20))
-                            
-                    return surface
+                    # Create a surface from the image
+                    surface = pygame.Surface(img.get_size(), pygame.SRCALPHA)
+                    surface.blit(img, (0, 0))
+                    
+                    if self.annotation_type == "3d":
+                        edges = [[0,1], [1,3], [3,2], [2,0],
+                                 [0,4], [4,5], [5,1], [5,7],
+                                 [7,6], [6,4], [6,2], [7,3]]
+                        img_width, img_height = img.get_size()
+                        for bbox in boxes:
+                            if 'vertices' in bbox:
+                                verts = bbox['vertices']
+                                xs = [v[0] for v in verts]
+                                ys = [v[1] for v in verts]
+                                # Compute the center of the projected box
+                                avg_x = sum(xs) / len(xs)
+                                avg_y = sum(ys) / len(ys)
+                                # Only draw if the box center is within the image
+                                if not (0 <= avg_x < img_width and 0 <= avg_y < img_height):
+                                    continue
+                                for edge in edges:
+                                    start = verts[edge[0]]
+                                    end = verts[edge[1]]
+                                    pygame.draw.line(surface, (255, 0, 0),
+                                                     (int(start[0]), int(start[1])),
+                                                     (int(end[0]), int(end[1])), 2)
+                                if 'distance' in bbox:
+                                    font = pygame.font.Font(None, 24)
+                                    dist_text = font.render(f"{bbox['distance']:.1f}m", True, (255,255,255))
+                                    surface.blit(dist_text, (int(verts[0][0]), int(verts[0][1])-20))
+                        return surface
+                    else:
+                        # Existing 2D drawing: draw axis-aligned rectangle
+                        for bbox in boxes:
+                            if 'bbox' in bbox:
+                                x, y, w, h = bbox['bbox']
+                            elif 'vertices' in bbox:
+                                verts = bbox['vertices']
+                                xs = [v[0] for v in verts]
+                                ys = [v[1] for v in verts]
+                                x_min = min(xs)
+                                y_min = min(ys)
+                                x_max = max(xs)
+                                y_max = max(ys)
+                                x, y, w, h = x_min, y_min, x_max - x_min, y_max - y_min
+                            else:
+                                continue
+                            pygame.draw.rect(surface, (255, 0, 0), (x, y, w, h), 2)
+                            if 'distance' in bbox:
+                                font = pygame.font.Font(None, 24)
+                                dist_text = font.render(f"{bbox['distance']:.1f}m", True, (255,255,255))
+                                surface.blit(dist_text, (x, y-20))
+                        return surface
                 except Exception as e:
                     print(f"Error loading bbox data: {e}")
                     return img
@@ -512,15 +558,21 @@ if __name__ == "__main__":
             config = yaml.safe_load(f)
         base_save_path = config["simulation"]["base_save_path"]
         
-        # Choisir manuellement la scène à visualiser (via ligne de commande ou valeur par défaut)
+        # Choisir manuellement la scène à visualiser
         if len(sys.argv) > 1:
             scene_name = sys.argv[1]
         else:
-            scene_name = "scene_1"  # Valeur par défaut, à modifier selon vos besoins
+            scene_name = "scene_1"  # Valeur par défaut
         
+        # New: Read annotation type ("2d" or "3d") if provided (default "2d")
+        if len(sys.argv) > 2:
+            annotation_type = sys.argv[2]
+        else:
+            annotation_type = "2d"
+            
         data_dir = os.path.join(base_save_path, scene_name)
-        print(f"Starting flexible replay from: {data_dir}")
-        player = FlexibleDataPlayer(data_dir)
+        print(f"Starting flexible replay from: {data_dir} with '{annotation_type}' annotations")
+        player = FlexibleDataPlayer(data_dir, annotation_type)
         player.run()
     except Exception as e:
         print(f"Error: {e}")

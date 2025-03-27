@@ -1056,7 +1056,7 @@ class MainWindow(QMainWindow):
             if not scenes:
                 raise RuntimeError("No scenes found in output directory")
             
-            # Create scene selection dialog
+            # Create scene selection dialog with annotation type selection
             dialog = QDialog(self)
             dialog.setWindowTitle("Select Scene to Visualize")
             dialog.setModal(True)  # Make dialog modal
@@ -1066,6 +1066,18 @@ class MainWindow(QMainWindow):
             label = QLabel("Select scene to visualize:")
             combo = QComboBox()
             combo.addItems(scenes)
+            layout.addWidget(label)
+            layout.addWidget(combo)
+            
+            # Add annotation type selector
+            ann_layout = QHBoxLayout()
+            ann_label = QLabel("Select Bounding Box Type:")
+            ann_combo = QComboBox()
+            ann_combo.addItem("2D", "2d")
+            ann_combo.addItem("3D", "3d")
+            ann_layout.addWidget(ann_label)
+            ann_layout.addWidget(ann_combo)
+            layout.addLayout(ann_layout)
             
             # Add buttons
             buttons = QHBoxLayout()
@@ -1075,24 +1087,21 @@ class MainWindow(QMainWindow):
             cancel_btn.clicked.connect(dialog.reject)
             buttons.addWidget(ok_btn)
             buttons.addWidget(cancel_btn)
-            
-            # Arrange dialog layout
-            layout.addWidget(label)
-            layout.addWidget(combo)
             layout.addLayout(buttons)
             dialog.setLayout(layout)
             
             # Show dialog and handle result
-            if dialog.exec() == 1:  # Use 1 for Accepted instead of enum
+            if dialog.exec() == QDialog.DialogCode.Accepted:
                 selected_scene = combo.currentText()
+                annotation_type = ann_combo.currentData()
                 
                 # Get Python executable and current directory
                 python_exe = sys.executable
                 current_dir = os.path.dirname(os.path.abspath(__file__))
                 
-                # Run visualization script
+                # Run visualization script with scene and annotation type arguments
                 process = subprocess.Popen(
-                    [python_exe, "multi_sensor_replay.py", selected_scene],
+                    [python_exe, "multi_sensor_replay.py", selected_scene, annotation_type],
                     cwd=current_dir
                 )
                 
