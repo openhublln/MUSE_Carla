@@ -1,6 +1,6 @@
 simulation:
   num_scenes: 2
-  seconds_per_scene: 1
+  seconds_per_scene: 2
   base_save_path: ./_out
   traffic:
     num_vehicles: 30
@@ -13,8 +13,8 @@ sensors:
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '1500.0'
-    image_size_y: '1500.0'
+    image_size_x: '800.0'
+    image_size_y: '600.0'
     fov: '90.0'
   transform:
     location:
@@ -30,8 +30,8 @@ sensors:
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '1500.0'
-    image_size_y: '1500.0'
+    image_size_x: '800.0'
+    image_size_y: '600.0'
     fov: '90.0'
   transform:
     location:
@@ -47,9 +47,9 @@ sensors:
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '1500.0'
-    image_size_y: '1500.0'
-    fov: '120.0'
+    image_size_x: '800.0'
+    image_size_y: '600.0'
+    fov: '90.0'
   transform:
     location:
       x: 0.4
@@ -60,13 +60,47 @@ sensors:
       yaw: 45.0
       roll: 0.0
   collect_bbox: true
+- name: Camera_FrontLeft
+  type: camera
+  blueprint: sensor.camera.rgb
+  attributes:
+    image_size_x: '800.0'
+    image_size_y: '600.0'
+    fov: '90.0'
+  transform:
+    location:
+      x: 0.4
+      y: -0.3
+      z: 2.4
+    rotation:
+      pitch: 0.0
+      yaw: -45.0
+      roll: 0.0
+  collect_bbox: true
+- name: Camera_BackRight
+  type: camera
+  blueprint: sensor.camera.rgb
+  attributes:
+    image_size_x: '800.0'
+    image_size_y: '600.0'
+    fov: '90.0'
+  transform:
+    location:
+      x: -0.3
+      y: 0.5
+      z: 2.4
+    rotation:
+      pitch: 0.0
+      yaw: -225.0
+      roll: 0.0
+  collect_bbox: true
 - name: Camera_BackLeft
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '1500.0'
-    image_size_y: '1500.0'
-    fov: '120.0'
+    image_size_x: '800.0'
+    image_size_y: '600.0'
+    fov: '90.0'
   transform:
     location:
       x: -0.3
