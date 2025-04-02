@@ -12,86 +12,103 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 def process_camera(file_path, sensor_name, annotation_type, cell_size):
     try:
-        # Charger l'image
         img = pygame.image.load(str(file_path))
-        
-        # Choose annotation file based on annotation_type setting
+        surface = pygame.Surface(img.get_size(), pygame.SRCALPHA)
+        surface.blit(img, (0, 0))
+
+        # Annotation filename based on type (remains the same logic)
         if annotation_type == "3d":
+            # This now points to the JSON file with the *new* structure
             bbox_file = str(file_path).replace('.png', '_3dbbox.json')
         else:
+            # Keep 2d bbox logic if needed, although we focus on 3d clipping now
             bbox_file = str(file_path).replace('.png', '_bbox.json')
-            
+
         if os.path.exists(bbox_file):
             try:
                 with open(bbox_file, 'r') as f:
-                    bbox_data = json.load(f)
-                
-                # Determine bounding boxes list from loaded data
-                if isinstance(bbox_data, dict):
-                    boxes = bbox_data.get('bounding_boxes', [])
-                else:
-                    boxes = bbox_data
-                    
-                # Create a surface from the image
-                surface = pygame.Surface(img.get_size(), pygame.SRCALPHA)
-                surface.blit(img, (0, 0))
-                
+                    annotation_data = json.load(f) # Load the list of actor data
+
+                # --- NEW DRAWING LOGIC for Clipped Segments ---
                 if annotation_type == "3d":
-                    edges = [[0,1], [1,3], [3,2], [2,0],
-                                [0,4], [4,5], [5,1], [5,7],
-                                [7,6], [6,4], [6,2], [7,3]]
-                    img_width, img_height = img.get_size()
-                    for bbox in boxes:
-                        if 'vertices' in bbox:
-                            verts = bbox['vertices']
-                            xs = [v[0] for v in verts]
-                            ys = [v[1] for v in verts]
-                            # Compute the center of the projected box
-                            avg_x = sum(xs) / len(xs)
-                            avg_y = sum(ys) / len(ys)
-                            # Only draw if the box center is within the image
-                            if not (0 <= avg_x < img_width and 0 <= avg_y < img_height):
-                                continue
-                            for edge in edges:
-                                start = verts[edge[0]]
-                                end = verts[edge[1]]
-                                pygame.draw.line(surface, (255, 0, 0),
-                                                    (int(start[0]), int(start[1])),
-                                                    (int(end[0]), int(end[1])), 2)
-                            if 'distance' in bbox:
-                                font = pygame.font.Font(None, 24)
-                                dist_text = font.render(f"{bbox['distance']:.1f}m", True, (255,255,255))
-                                surface.blit(dist_text, (int(verts[0][0]), int(verts[0][1])-20))
-                    return surface
-                else:
-                    # Existing 2D drawing: draw axis-aligned rectangle
-                    for bbox in boxes:
-                        if 'bbox' in bbox:
-                            x, y, w, h = bbox['bbox']
-                        elif 'vertices' in bbox:
-                            verts = bbox['vertices']
-                            xs = [v[0] for v in verts]
-                            ys = [v[1] for v in verts]
-                            x_min = min(xs)
-                            y_min = min(ys)
-                            x_max = max(xs)
-                            y_max = max(ys)
-                            x, y, w, h = x_min, y_min, x_max - x_min, y_max - y_min
-                        else:
-                            continue
-                        pygame.draw.rect(surface, (255, 0, 0), (x, y, w, h), 2)
-                        if 'distance' in bbox:
-                            font = pygame.font.Font(None, 24)
-                            dist_text = font.render(f"{bbox['distance']:.1f}m", True, (255,255,255))
-                            surface.blit(dist_text, (x, y-20))
-                    return surface
+                    line_color = (0, 255, 0) # Green for clipped edges
+                    line_thickness = 2
+
+                    # Check if the loaded data is a list (new format)
+                    if isinstance(annotation_data, list):
+                        for actor_data in annotation_data:
+                            if 'clipped_segments' in actor_data:
+                                for segment in actor_data['clipped_segments']:
+                                    # segment is [[x1, y1], [x2, y2]]
+                                    p1 = (int(segment[0][0]), int(segment[0][1]))
+                                    p2 = (int(segment[1][0]), int(segment[1][1]))
+                                    pygame.draw.line(surface, line_color, p1, p2, line_thickness)
+
+                            # Optional: Draw the bbox derived from clipped points
+                            # if 'bbox_from_clipped' in actor_data and actor_data['bbox_from_clipped']:
+                            #     x, y, w, h = actor_data['bbox_from_clipped']
+                            #     pygame.draw.rect(surface, (255, 165, 0), (x, y, w, h), 1) # Orange outline
+
+                    # --- Fallback/Compatibility for OLD 3D format (8 vertices) ---
+                    elif isinstance(annotation_data, dict) and 'bounding_boxes' in annotation_data:
+                         # Handle old format if necessary, or remove this block
+                         # This block is less relevant now but kept for potential compatibility
+                         boxes = annotation_data.get('bounding_boxes', [])
+                         edges = [[0,1], [1,3], [3,2], [2,0], [0,4], [4,5], [5,1], [5,7], [7,6], [6,4], [6,2], [7,3]]
+                         for bbox in boxes:
+                             if 'vertices' in bbox:
+                                 verts = bbox['vertices']
+                                 # Draw lines using old vertex data (might be distorted)
+                                 # Add checks for INVALID_POINT if using the intermediate solution
+                                 valid_verts = [v for v in verts if v != [-1.0, -1.0]] # Example check
+                                 if len(valid_verts) > 1: # Need at least 2 points to draw edges
+                                     try:
+                                         for edge in edges:
+                                            # Basic check if indices are valid and points are not marked invalid
+                                            if max(edge) < len(verts) and verts[edge[0]] != [-1.0, -1.0] and verts[edge[1]] != [-1.0, -1.0]:
+                                                start = verts[edge[0]]
+                                                end = verts[edge[1]]
+                                                pygame.draw.line(surface, (255, 0, 0), # Red for old/potentially distorted
+                                                                    (int(start[0]), int(start[1])),
+                                                                    (int(end[0]), int(end[1])), 2)
+                                     except Exception as draw_err:
+                                        print(f"Minor error drawing old format edge: {draw_err}")
+
+
+                # --- Existing 2D Annotation Drawing ---
+                else: # annotation_type == "2d"
+                     # Check standard 2D bbox format
+                    if isinstance(annotation_data, dict) and 'bounding_boxes' in annotation_data:
+                        boxes = annotation_data.get('bounding_boxes', [])
+                        for bbox in boxes:
+                             if 'bbox' in bbox: # Standard 2d [x, y, w, h]
+                                x, y, w, h = bbox['bbox']
+                                pygame.draw.rect(surface, (255, 0, 0), (x, y, w, h), 2)
+                                # Add distance text if available
+                                if 'distance' in bbox:
+                                     font = pygame.font.Font(None, 24)
+                                     dist_text = font.render(f"{bbox['distance']:.1f}m", True, (255,255,255))
+                                     surface.blit(dist_text, (x, y-20))
+
+                return surface # Return the surface with drawings
+
+            except json.JSONDecodeError as e:
+                print(f"Error decoding JSON file {bbox_file}: {e}")
+                return img # Return original image on JSON error
             except Exception as e:
-                print(f"Error loading bbox data: {e}")
-                return img
-        return img
+                print(f"Error processing annotations file {bbox_file}: {e}")
+                return img # Return original image on other processing errors
+
+        return img # Return original image if no annotation file found
+
+    except pygame.error as e:
+        print(f"Error loading image file {file_path}: {e}")
+        # Return a blank surface matching cell_size if image loading fails
+        return pygame.Surface(cell_size, pygame.SRCALPHA)
     except Exception as e:
-        print(f"Error loading camera image: {e}")
-        return pygame.Surface(cell_size)
+        print(f"General error processing camera {file_path.name}: {e}")
+        # Return a blank surface matching cell_size on other errors
+        return pygame.Surface(cell_size, pygame.SRCALPHA)
 
 def process_radar(file_path, cell_size):
     try:

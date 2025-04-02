@@ -1,9 +1,9 @@
 simulation:
   num_scenes: 2
-  seconds_per_scene: 1
+  seconds_per_scene: 3
   base_save_path: ./_out
   traffic:
-    num_vehicles: 30
+    num_vehicles: 50
     num_pedestrians: 10
     safe_spawn: true
     car_lights_on: true
@@ -24,23 +24,6 @@ sensors:
     rotation:
       pitch: 0.0
       yaw: 0.0
-      roll: 0.0
-  collect_bbox: true
-- name: Camera_Back
-  type: camera
-  blueprint: sensor.camera.rgb
-  attributes:
-    image_size_x: '800.0'
-    image_size_y: '600.0'
-    fov: '90.0'
-  transform:
-    location:
-      x: -1.0
-      y: 0.0
-      z: 2.4
-    rotation:
-      pitch: 0.0
-      yaw: 180.0
       roll: 0.0
   collect_bbox: true
 - name: Semantic_Lidar

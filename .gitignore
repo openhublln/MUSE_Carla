@@ -18,3 +18,6 @@ carlavenv/
 # System files
 .DS_Store
 Thumbs.db
+
+# Todo
+todo.md
