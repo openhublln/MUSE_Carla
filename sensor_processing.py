@@ -155,6 +155,9 @@ def clean_scene_data(scene_path, sensor_names):
                 
             # Accept all supported file types
             if any(f.endswith(ext) for ext in ['.png', '.npy', '.json', '.ply']):
+                # Skip 3D bbox annotation files when building timestamp list
+                if "_3dbbox.json" in f:
+                    continue
                 # For PLY files, also check if corresponding NPY exists
                 if f.endswith('.ply'):
                     npy_file = f[:-4] + '.npy'
@@ -188,6 +191,12 @@ def clean_scene_data(scene_path, sensor_names):
             continue
             
         for file_name in os.listdir(sensor_folder):
+            # Preserve 3D bbox annotation files if their corresponding frame exists
+            if "_3dbbox.json" in file_name:
+                base_ts = file_name.split("_3dbbox.json")[0]
+                if base_ts in common_ts:
+                    continue
+                
             base_name = os.path.splitext(file_name)[0]
             if base_name not in common_ts:
                 file_path = os.path.join(sensor_folder, file_name)
