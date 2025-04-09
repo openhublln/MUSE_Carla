@@ -63,7 +63,7 @@ def detect_vehicle_instance_boxes(image_path, vehicle_tags=[14, 15, 16, 18]):
 
 def find_paired_instance_image(rgb_image_path, instance_folder):
     """Find the corresponding instance segmentation image"""
-    timestamp = Path(rgb_image_path).stem
+    timestamp = int(Path(rgb_image_path).stem)  # Convert to integer
     instance_path = Path(instance_folder) / f"{timestamp}.png"
     return str(instance_path) if instance_path.exists() else None
 
@@ -124,10 +124,10 @@ def process_scene(scene_path):
                 boxes, instance_ids = detect_vehicle_instance_boxes(instance_path)
                 
                 # Save bounding box data using camera configuration
-                timestamp = Path(rgb_path).stem
+                timestamp = int(Path(rgb_path).stem)  # Convert to integer
                 bbox_data = {
                     "image_file": f"{timestamp}.png",
-                    "timestamp": timestamp,
+                    "timestamp": timestamp,  # Ensure timestamp is saved as an integer
                     "camera_data": camera_config,
                     "bounding_boxes": [
                         {

@@ -19,5 +19,9 @@ carlavenv/
 .DS_Store
 Thumbs.db
 
-# Todo
+# Others
 todo.md
+.github
+nuscenes_format
+tests
+

@@ -1,0 +1,50 @@
+# NuScenes Converter Configuration
+
+# Target NuScenes version
+version: 'v1.0'
+
+# Input/Output paths
+input:
+  base_dir: '_out'  # Base directory containing scene folders
+  scene_folders: ['scene_1', 'scene_2']  # List of scene folders to process
+
+output:
+  base_dir: 'nuscenes_format'  # Output directory for NuScenes format data
+  maintain_folder_structure: true  # Keep original scene folder structure
+  keyframe_rate: 10.0  # Updated target keyframe rate to 10 Hz
+
+# Keyframe settings
+keyframe:
+  rate: 2  # Hz (NuScenes standard is 2Hz)
+  min_points_per_object: 1  # Minimum number of lidar points for valid annotation
+
+# Coordinate system
+coordinate_system:
+  up_axis: 'z'  # CARLA uses Z-up coordinate system
+  forward_axis: 'x'  # CARLA uses X-forward coordinate system
+  use_ego_vehicle_frame: false  # Whether to use ego vehicle as origin
+
+# Sensor mappings (CARLA sensor -> NuScenes channel)
+sensor_mappings:
+  camera:
+    'Camera_Front': 'CAM_FRONT'
+    'Camera_Back': 'CAM_BACK'
+  lidar:
+    'Semantic_Lidar': 'LIDAR_TOP'
+
+# Category mappings (CARLA type -> NuScenes category)
+category_mappings:
+  'vehicle': 'vehicle.car'
+  'walker.pedestrian': 'human.pedestrian.adult'
+  # Add more mappings as needed
+
+# Attribute definitions
+attributes:
+  vehicle:
+    - name: 'vehicle.moving'
+    - name: 'vehicle.parked'
+    - name: 'vehicle.stopped'
+  human:
+    - name: 'pedestrian.moving'
+    - name: 'pedestrian.standing'
+    - name: 'pedestrian.sitting_lying_down'

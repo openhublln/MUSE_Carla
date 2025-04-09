@@ -1,6 +1,7 @@
 import os
 import time
 from queue import Empty
+from datetime import datetime
 
 def create_scene_folders(scene_id, sensor_names, base_save_path):
     """ Crée les dossiers pour chaque scène d'après les noms des capteurs de la config """
@@ -17,14 +18,18 @@ def run_simulation(scene_id, world, vehicle, sensor_list, sensor_queue, ticks_pe
 
     print(f"Simulation {scene_id} démarrée...")
 
+    # Capture the system's starting Unix time in microseconds
+    start_unix_time = int(datetime.utcnow().timestamp() * 1e6)
+
     try:
         for tick in range(ticks_per_scene):  
             world.tick()
             snapshot = world.get_snapshot()
-            world_timestamp = int(snapshot.timestamp.elapsed_seconds * 1e3)  # Timestamp en millisecondes
+            elapsed_microseconds = int(snapshot.timestamp.elapsed_seconds * 1e6)  # Elapsed time in microseconds
+            unix_timestamp = start_unix_time + elapsed_microseconds  # Calculate Unix timestamp
             w_frame = snapshot.frame
 
-            print(f"Scene {scene_id} - Tick {tick+1}/{ticks_per_scene} - World frame: {w_frame} - Timestamp: {world_timestamp}")
+            print(f"Scene {scene_id} - Tick {tick+1}/{ticks_per_scene} - World frame: {w_frame} - Unix Timestamp: {unix_timestamp}")
 
             # Dictionnaire pour stocker les données de chaque capteur
             received_sensors = {}
@@ -40,7 +45,7 @@ def run_simulation(scene_id, world, vehicle, sensor_list, sensor_queue, ticks_pe
 
             # Afficher toutes les données reçues pour ce tick
             for sensor_name, sensor_timestamp in received_sensors.items():
-                print(f"    Sensor Timestamp: {world_timestamp}   Sensor: {sensor_name}")
+                print(f"    Sensor Unix Timestamp: {unix_timestamp}   Sensor: {sensor_name}")
 
     except Exception as e:
         print(f"Erreur pendant la simulation: {e}")
