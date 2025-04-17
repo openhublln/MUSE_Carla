@@ -6,7 +6,6 @@ version: 'v1.0'
 # Input/Output paths
 input:
   base_dir: '_out'  # Base directory containing scene folders
-  scene_folders: ['scene_1', 'scene_2']  # List of scene folders to process
 
 output:
   base_dir: 'nuscenes_format'  # Output directory for NuScenes format data
@@ -29,8 +28,25 @@ sensor_mappings:
   camera:
     'Camera_Front': 'CAM_FRONT'
     'Camera_Back': 'CAM_BACK'
+    'Camera_FrontRight': 'CAM_FRONTRIGHT'
+    'Camera_FrontLeft': 'CAM_FRONTLEFT' 
+    'Camera_BackRight': 'CAM_BACKRIGHT'
+    'Camera_BackLeft': 'CAM_BACKLEFT'
+  radar:
+    'Radar_Front': 'RADAR_FRONT'
+    'Radar_Back': 'RADAR_BACK'
+    'Radar_FrontRight': 'RADAR_FRONTRIGHT'
+    'Radar_FrontLeft': 'RADAR_FRONTLEFT'
+    'Radar_BackRight': 'RADAR_BACKRIGHT'
+    'Radar_BackLeft': 'RADAR_BACKLEFT'
   lidar:
-    'Semantic_Lidar': 'LIDAR_TOP'
+    'Lidar': 'LIDAR'
+  semantic_lidar:
+    'Semantic_Lidar': 'SEMANTIC_LIDAR'
+  gnss:
+    'GNSS': 'GNSS'
+  imu:
+    'IMU': 'IMU'
 
 # Category mappings (CARLA type -> NuScenes category)
 category_mappings:

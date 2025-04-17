@@ -13,6 +13,12 @@ from scipy.spatial.transform import Rotation
 class NuScenesConverter:
     """Converts CARLA sensor data to NuScenes format."""
     
+    def _detect_scene_folders(self):
+        """Automatically detect scene folders based on the simulation configuration."""
+        scene_base_path = self.input_base
+        detected_scenes = [folder.name for folder in scene_base_path.iterdir() if folder.is_dir()]
+        return detected_scenes
+
     def __init__(self, config_path: str):
         """Initialize the converter with the given config file.
         
@@ -23,16 +29,19 @@ class NuScenesConverter:
         self.version = self.config['version']
         self.input_base = Path(self.config['input']['base_dir'])
         self.output_base = Path(self.config['output']['base_dir'])
-        self.scene_folders = self.config['input']['scene_folders']
-        
+        self.scene_folders = self._detect_scene_folders()  # Automatically detect scenes
+
         # Ensure output directory exists
         self.output_base.mkdir(parents=True, exist_ok=True)
-        
+
         # Initialize storage for various records
         self._init_storage()
 
         # Parse configuration files
         self._parse_config_files()
+
+        # Set global reference frame
+        self._set_global_reference_frame()
     
     def _load_config(self, config_path: str) -> dict:
         """Load and validate the converter configuration."""
@@ -124,6 +133,47 @@ class NuScenesConverter:
         # Load converter config (already loaded in __init__)
         self.converter_config = self.config
 
+    def _set_global_reference_frame(self):
+        """Define the global reference frame for the dataset."""
+        # Use CARLA map origin as the global reference frame
+        self.global_origin = np.array([0.0, 0.0, 0.0])
+
+    def _transform_to_global_frame(self, transform):
+        """Transform CARLA world coordinates to the global reference frame.
+
+        Args:
+            transform: A CARLA Transform object containing location and rotation.
+
+        Returns:
+            A dictionary with `translation` and `rotation` in the global frame.
+        """
+        # Extract location and rotation from the transform
+        location = transform.location
+        rotation = transform.rotation
+
+        # Convert location to global frame
+        translation = np.array([location.x, location.y, location.z]) - self.global_origin
+
+        # Convert rotation (Euler angles) to Quaternion
+        quaternion = Rotation.from_euler('xyz', [np.radians(rotation.roll), np.radians(rotation.pitch), np.radians(rotation.yaw)]).as_quat()
+
+        return {
+            "translation": translation.tolist(),
+            "rotation": quaternion.tolist()
+        }
+
+    def _adjust_z_for_ego_pose(self, translation):
+        """Adjust the Z-coordinate for ego_pose to match NuScenes' Z=0 assumption.
+
+        Args:
+            translation: A list representing the [x, y, z] translation.
+
+        Returns:
+            A modified translation with Z set to 0.
+        """
+        translation[2] = 0.0  # Force Z=0
+        return translation
+
     def _find_data_files(self, scene_folder: str) -> Dict[str, List[str]]:
         """Recursively find data files in the specified scene folder.
 
@@ -181,18 +231,19 @@ class NuScenesConverter:
         if not timestamps:
             return []
 
-        # Ensure timestamps are sorted (should be if coming from sorted dict keys)
+        # Ensure timestamps are sorted
         timestamps.sort()
 
-        interval = int(1e6 / target_rate)  # Convert rate to microseconds interval
+        # Calculate the interval in microseconds (1 second = 1e6 microseconds)
+        interval = int(1e6 / target_rate)
         keyframes = [timestamps[0]]  # Always include the first timestamp
 
         last_keyframe_ts = timestamps[0]
         for ts in timestamps[1:]:
-            # Select if the interval has passed since the *last selected keyframe*
+            # Select if the interval has passed since the last selected keyframe
             if ts - last_keyframe_ts >= interval:
                 keyframes.append(ts)
-                last_keyframe_ts = ts # Update the last selected timestamp
+                last_keyframe_ts = ts  # Update the last selected timestamp
 
         return keyframes
 
@@ -222,13 +273,112 @@ class NuScenesConverter:
 
             return scene_samples
 
+    def _euler_to_quaternion(self, roll: float, pitch: float, yaw: float) -> List[float]:
+        """Convert Euler angles (roll, pitch, yaw) to a Quaternion (w, x, y, z).
+
+        Args:
+            roll: Rotation around the X-axis in degrees.
+            pitch: Rotation around the Y-axis in degrees.
+            yaw: Rotation around the Z-axis in degrees.
+
+        Returns:
+            A list representing the Quaternion [w, x, y, z].
+        """
+        quaternion = Rotation.from_euler('xyz', [np.radians(roll), np.radians(pitch), np.radians(yaw)]).as_quat()
+        return quaternion.tolist()
+
+    def _convert_bounding_box_size(self, extent) -> List[float]:
+        """Convert CARLA bounding box extent to NuScenes size.
+
+        Args:
+            extent: A CARLA bounding box extent object with x, y, z (half-dimensions).
+
+        Returns:
+            A list representing the size [width, length, height] in NuScenes format.
+        """
+        # Double the extent values to get full dimensions
+        width = extent.y * 2  # CARLA y -> NuScenes width
+        length = extent.x * 2  # CARLA x -> NuScenes length
+        height = extent.z * 2  # CARLA z -> NuScenes height
+
+        return [width, length, height]
+
+    def _generate_sensor_entries(self):
+        sensor_mappings = self.config.get("sensor_mappings", {})
+        simulation_sensors = self.sim_config.get("sensors", [])
+        self.sensors = []
+        # Map sensor name to token for robust linking
+        self.sensor_name_to_token = {}
+        for sensor in simulation_sensors:
+            sensor_name = sensor["name"]
+            sensor_type = sensor["type"]
+            if sensor_type in sensor_mappings and sensor_name in sensor_mappings[sensor_type]:
+                channel = sensor_mappings[sensor_type][sensor_name]
+                token = self._generate_token()
+                sensor_entry = {
+                    "token": token,
+                    "channel": channel,
+                    "modality": sensor_type
+                }
+                self.sensors.append(sensor_entry)
+                self.sensor_name_to_token[sensor_name] = token
+        sensor_output_path = self.output_base / 'sensor.json'
+        with open(sensor_output_path, 'w') as f:
+            json.dump(self.sensors, f, indent=2)
+
+    def _generate_calibrated_sensors(self):
+        self.calibrated_sensors = []
+        simulation_sensors = self.sim_config.get("sensors", [])
+        # Build sensor name to token mapping from sensor.json
+        sensor_json_path = self.output_base / 'sensor.json'
+        with open(sensor_json_path, 'r') as f:
+            sensor_json = json.load(f)
+        sensor_name_to_token = {entry["channel"]: entry["token"] for entry in sensor_json}
+        sensor_mappings = self.config.get("sensor_mappings", {})
+        for sensor in simulation_sensors:
+            sensor_name = sensor["name"]
+            sensor_type = sensor["type"]
+            if sensor_type in sensor_mappings and sensor_name in sensor_mappings[sensor_type]:
+                channel = sensor_mappings[sensor_type][sensor_name]
+                sensor_token = sensor_name_to_token.get(channel)
+                if not sensor_token:
+                    continue
+                loc = sensor["transform"]["location"]
+                rot = sensor["transform"]["rotation"]
+                # Convert CARLA coordinates (X-forward, Y-right, Z-up) to NuScenes (X-forward, Y-left, Z-up)
+                # Negate the Y-coordinate for translation
+                translation = [float(loc["x"]), -float(loc["y"]), float(loc["z"])]
+
+                # Get CARLA Euler angles (degrees)
+                roll_carla = float(rot.get("roll", 0.0))
+                pitch_carla = float(rot.get("pitch", 0.0))
+                yaw_carla = float(rot.get("yaw", 0.0))
+
+                # Convert CARLA Euler angles to NuScenes Euler angles (degrees)
+                # Negate roll and pitch due to the flipped Y-axis
+                roll_nusc = -roll_carla
+                pitch_nusc = -pitch_carla
+                yaw_nusc = yaw_carla
+
+                # Convert NuScenes Euler angles to quaternion
+                # The _euler_to_quaternion function expects angles in the target (NuScenes) frame convention
+                rotation_quaternion = self._euler_to_quaternion(roll_nusc, pitch_nusc, yaw_nusc)
+
+                calibrated_sensor_entry = {
+                    "token": self._generate_token(),
+                    "sensor_token": sensor_token,
+                    "translation": translation,
+                    "rotation": rotation_quaternion,
+                    "camera_intrinsic": []
+                }
+                self.calibrated_sensors.append(calibrated_sensor_entry)
+
     def convert_scene(self, scene_folder: str):
         """Convert a single scene folder to NuScenes format.
 
         Args:
             scene_folder: Name of the scene folder to convert.
         """
-        print(f"Converting scene: {scene_folder}")
 
         # Parse data files
         data_files = self._find_data_files(scene_folder)
@@ -275,7 +425,6 @@ class NuScenesConverter:
 
         # --- Link prev/next within the scene's samples ---
         if scene_samples:
-            print(f"Generated {len(scene_samples)} samples for scene {scene_folder}.")
             for i in range(len(scene_samples)):
                 if i > 0:
                     scene_samples[i]["prev"] = scene_samples[i-1]["token"]
@@ -302,7 +451,6 @@ class NuScenesConverter:
             })
         else:
             # Handle case where keyframes were selected but sample generation failed (shouldn't happen with current logic)
-             print(f"Warning: Keyframes selected but no samples generated for {scene_folder}. Creating scene entry with 0 samples.")
              self.scenes.append({
                  "token": scene_token,
                  "log_token": "", # Assign log token later if needed
@@ -315,13 +463,16 @@ class NuScenesConverter:
 
     def convert_all(self):
         """Convert all scenes specified in the config."""
+        # Generate sensor entries first to ensure sensor tokens are available
+        self._generate_sensor_entries()
+
         for scene_folder in self.scene_folders:
             print(f"Processing scene: {scene_folder}")
             self.convert_scene(scene_folder)
 
-        # Ensure all scenes and samples are written correctly
-        print(f"DEBUG: Total scenes processed: {len(self.scenes)}")
-        print(f"DEBUG: Total samples generated: {len(self.samples)}")
+        # Generate calibrated sensors
+        self._generate_calibrated_sensors()
+
         self._write_all_tables()  # Write all tables to include data from all scenes
 
     def _write_metadata(self):
@@ -375,12 +526,24 @@ class NuScenesConverter:
             'sample_annotation': self.sample_annotations,
             'sample_data': self.sample_data,
             'scene': self.scenes,
-            'sensor': self.sensors,
+            'sensor': self.sensors,  # Use the self.sensors populated earlier
             'visibility': self.visibilities,
         }
 
         for table_name, data in tables.items():
-            self._write_output(table_name, data)
+            # Skip writing calibrated_sensor and sensor here, handle them explicitly below
+            if table_name not in ['calibrated_sensor', 'sensor']:
+                 self._write_output(table_name, data)
+
+        # Write calibrated_sensor.json
+        output_path = self.output_base / 'calibrated_sensor.json'
+        with open(output_path, 'w') as f:
+            json.dump(self.calibrated_sensors, f, indent=2)
+
+        # Write sensor.json explicitly to ensure it contains the tokens used by calibrated_sensor
+        sensor_output_path = self.output_base / 'sensor.json'
+        with open(sensor_output_path, 'w') as f:
+            json.dump(self.sensors, f, indent=2)
 
 def main():
     """Main entry point."""
