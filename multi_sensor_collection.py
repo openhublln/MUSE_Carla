@@ -3,12 +3,36 @@ import random
 import time
 import yaml
 import carla
+import json
 from queue import Queue, Empty
 from bounding_box_export import export_3d_bboxes
 from traffic_setup import setup_traffic, spawn_ego_vehicle
 from sensor_processing import process_sensor_config, sensor_callback, clean_scene_data
 from simulation_logic import run_simulation, create_scene_folders
 from generate_bbox_annotations import process_scene
+
+EGO_POSE_FOLDER = "ego_pose"
+
+def save_ego_pose(ego_vehicle, timestamp, ego_pose_dir):
+    """Save the ego vehicle's pose as a JSON file in the ego_pose directory."""
+    transform = ego_vehicle.get_transform()
+    pose = {
+        "timestamp": timestamp,
+        "translation": {
+            "x": transform.location.x,
+            "y": transform.location.y,
+            "z": transform.location.z
+        },
+        "rotation": {
+            "pitch": transform.rotation.pitch,
+            "yaw": transform.rotation.yaw,
+            "roll": transform.rotation.roll
+        }
+    }
+    os.makedirs(ego_pose_dir, exist_ok=True)
+    pose_path = os.path.join(ego_pose_dir, f"{timestamp}.json")
+    with open(pose_path, 'w') as f:
+        json.dump(pose, f, indent=2)
 
 def main():
     """ Initialise Carla, configure les paramètres et lance les simulations """
@@ -89,6 +113,9 @@ def main():
                     for _ in range(20):
                         world.tick()
 
+                    # Setup ego_pose directory
+                    ego_pose_dir = os.path.join(save_path, EGO_POSE_FOLDER)
+
                     # Setup sensors and run simulation
                     sensor_list = []
                     for sensor in sensors_config:
@@ -103,13 +130,18 @@ def main():
                         )
                         actor = world.spawn_actor(bp_sensor, transform, attach_to=vehicle)
                         sensor_list.append(actor)
-                        # Passer world et vehicle au callback
                         actor.listen(lambda data, q=sensor_queue, name=sensor["name"], 
                                     path=save_path, w=world, v=vehicle, s=actor:
                                     sensor_callback(data, q, name, path, w, v, s))
 
-                    # Run simulation
-                    run_simulation(scene_id, world, vehicle, sensor_list, sensor_queue, ticks_per_scene)
+                    # Run simulation and collect ego pose at each tick
+                    for tick in range(ticks_per_scene):
+                        world.tick()
+                        snapshot = world.get_snapshot()
+                        timestamp = int(snapshot.timestamp.elapsed_seconds * 1000)
+                        save_ego_pose(vehicle, timestamp, ego_pose_dir)
+                        # Sensors are handled asynchronously by their callbacks
+
                     scene_completed = True
                     break  # Scene completed successfully, exit retry loop
 

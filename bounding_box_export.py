@@ -81,22 +81,6 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
 
     output_data = []
 
-    # --- Save Ego Vehicle Pose ---
-    ego_transform = ego_vehicle.get_transform()
-    ego_pose = {
-        "timestamp": timestamp,
-        "translation": {
-            "x": ego_transform.location.x,
-            "y": ego_transform.location.y,
-            "z": ego_transform.location.z
-        },
-        "rotation": {
-            "pitch": ego_transform.rotation.pitch,
-            "yaw": ego_transform.rotation.yaw,
-            "roll": ego_transform.rotation.roll
-        }
-    }
-
     # Process ONLY Dynamic Vehicles accessible via get_actors()
     vehicles = world.get_actors().filter('*vehicle*')
     for actor in vehicles:
@@ -192,14 +176,6 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
             },
             "pose": actor_pose
         })
-
-    # --- Save Ego Pose to JSON ---
-    ego_pose_file = os.path.join(save_path, f"{timestamp}_ego_pose.json")
-    try:
-        with open(ego_pose_file, 'w') as f:
-            json.dump(ego_pose, f, indent=2)
-    except Exception as e:
-        print(f"Error writing JSON file {ego_pose_file}: {e}")
 
     # --- Save to JSON ---
     output_file = os.path.join(save_path, f"{timestamp}_3dbbox.json")

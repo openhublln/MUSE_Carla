@@ -372,6 +372,98 @@ class NuScenesConverter:
                     "camera_intrinsic": []
                 }
                 self.calibrated_sensors.append(calibrated_sensor_entry)
+        # Write calibrated_sensor.json immediately after generating
+        calibrated_output_path = self.output_base / 'calibrated_sensor.json'
+        with open(calibrated_output_path, 'w') as f:
+            json.dump(self.calibrated_sensors, f, indent=2)
+
+    EGO_POSE_FOLDER = "ego_pose"
+
+    def _generate_sample_data_entries(self, scene_folder: str, scene_token: str):
+        scene_path = self.input_base / scene_folder
+        sensor_json_path = self.output_base / 'sensor.json'
+        calibrated_json_path = self.output_base / 'calibrated_sensor.json'
+        with open(sensor_json_path, 'r') as f:
+            sensor_json = json.load(f)
+        with open(calibrated_json_path, 'r') as f:
+            calibrated_json = json.load(f)
+        # Build channel -> sensor_token
+        channel_to_sensor_token = {entry["channel"]: entry["token"] for entry in sensor_json}
+        # Build sensor_token -> calibrated_sensor_token
+        sensor_token_to_calibrated_token = {entry["sensor_token"]: entry["token"] for entry in calibrated_json}
+        # Build sensor_folder -> channel mapping from config
+        sensor_folder_to_channel = {}
+        sensor_mappings = self.config.get("sensor_mappings", {})
+        for sensor_type, mapping in sensor_mappings.items():
+            for folder, channel in mapping.items():
+                sensor_folder_to_channel[folder] = channel
+        simulation_sensors = self.sim_config.get("sensors", [])
+        for sensor in simulation_sensors:
+            sensor_name = sensor["name"]
+            sensor_type = sensor["type"]
+            channel = sensor_folder_to_channel.get(sensor_name)
+            if not channel:
+                continue
+            sensor_token = channel_to_sensor_token.get(channel, "")
+            calibrated_sensor_token = sensor_token_to_calibrated_token.get(sensor_token, "")
+            sensor_folder = scene_path / sensor_name
+            if not sensor_folder.exists() or not sensor_folder.is_dir():
+                continue
+            if sensor_type == "camera":
+                ext = ".png"
+                fileformat = "png"
+                width = int(float(sensor["attributes"].get("image_size_x", 0)))
+                height = int(float(sensor["attributes"].get("image_size_y", 0)))
+            elif sensor_type in ("lidar", "semantic_lidar", "radar"):
+                ext = ".npy"
+                fileformat = "npy"
+                width = None
+                height = None
+            elif sensor_type in ("imu", "gnss"):
+                ext = ".json"
+                fileformat = "json"
+                width = None
+                height = None
+            else:
+                ext = None
+                fileformat = None
+                width = None
+                height = None
+            if not ext:
+                continue
+            files = sorted([f for f in sensor_folder.glob(f"*{ext}") if f.is_file()])
+            if not files:
+                continue
+            entries = []
+            for file in files:
+                try:
+                    timestamp = int(file.stem)
+                except Exception:
+                    continue
+                token = self._generate_token()
+                sample_token = self.token_maps.get('sample', {}).get(timestamp, "")
+                ego_pose_token = {entry["timestamp"]: entry["token"] for entry in self.ego_poses}.get(timestamp, "")
+                entry = {
+                    "token": token,
+                    "sample_token": sample_token,
+                    "ego_pose_token": ego_pose_token,
+                    "calibrated_sensor_token": calibrated_sensor_token,
+                    "filename": str(file.relative_to(self.input_base)),
+                    "fileformat": fileformat,
+                    "width": width,
+                    "height": height,
+                    "timestamp": timestamp,
+                    "is_key_frame": False,
+                    "next": "",
+                    "prev": ""
+                }
+                entries.append(entry)
+            for i, entry in enumerate(entries):
+                if i > 0:
+                    entry["prev"] = entries[i-1]["token"]
+                if i < len(entries) - 1:
+                    entry["next"] = entries[i+1]["token"]
+                self.sample_data.append(entry)
 
     def convert_scene(self, scene_folder: str):
         """Convert a single scene folder to NuScenes format.
@@ -379,7 +471,6 @@ class NuScenesConverter:
         Args:
             scene_folder: Name of the scene folder to convert.
         """
-
         # Parse data files
         data_files = self._find_data_files(scene_folder)
         if not data_files:
@@ -391,6 +482,31 @@ class NuScenesConverter:
         if not organized_data:
              print(f"Warning: Could not organize data by timestamp in {scene_folder}. Skipping.")
              return
+
+        # --- EGO POSE EXTRACTION ---
+        ego_pose_dir = self.input_base / scene_folder / "ego_pose"
+        if ego_pose_dir.exists() and ego_pose_dir.is_dir():
+            for pose_file in sorted(ego_pose_dir.glob("*.json")):
+                with open(pose_file, "r") as f:
+                    pose_data = json.load(f)
+                timestamp = pose_data["timestamp"]
+                translation = [
+                    float(pose_data["translation"]["x"]),
+                    float(pose_data["translation"]["y"]),
+                    0.0
+                ]
+                roll = float(pose_data["rotation"]["roll"])
+                pitch = float(pose_data["rotation"]["pitch"])
+                yaw = float(pose_data["rotation"]["yaw"])
+                quaternion = self._euler_to_quaternion(roll, pitch, yaw)
+                token = self._generate_token()
+                ego_pose_entry = {
+                    "token": token,
+                    "translation": translation,
+                    "rotation": quaternion,
+                    "timestamp": timestamp
+                }
+                self.ego_poses.append(ego_pose_entry)
 
         # Select keyframes
         target_rate = self.config['output']['keyframe_rate']
@@ -461,18 +577,16 @@ class NuScenesConverter:
                  "last_sample_token": "",
              })
 
+        # After generating samples and calibrated sensors, generate sample_data
+        self._generate_sample_data_entries(scene_folder, scene_token)
+
     def convert_all(self):
         """Convert all scenes specified in the config."""
-        # Generate sensor entries first to ensure sensor tokens are available
         self._generate_sensor_entries()
-
+        self._generate_calibrated_sensors()
         for scene_folder in self.scene_folders:
             print(f"Processing scene: {scene_folder}")
             self.convert_scene(scene_folder)
-
-        # Generate calibrated sensors
-        self._generate_calibrated_sensors()
-
         self._write_all_tables()  # Write all tables to include data from all scenes
 
     def _write_metadata(self):
