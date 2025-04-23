@@ -465,6 +465,29 @@ class NuScenesConverter:
                     entry["next"] = entries[i+1]["token"]
                 self.sample_data.append(entry)
 
+    def _generate_log_entry(self):
+        """Generate the NuScenes log entry from log_info.json."""
+        log_info_path = self.input_base / "log_info.json"
+        if not log_info_path.exists():
+            print(f"Warning: log_info.json not found at {log_info_path}. Skipping log.json generation.")
+            return
+        with open(log_info_path, 'r') as f:
+            log_info = json.load(f)
+        log_entry = {
+            "token": self._generate_token(),
+            "logfile": log_info.get("logfile", ""),
+            "vehicle": log_info.get("vehicle", ""),
+            "date_captured": log_info.get("date_captured", ""),
+            "location": log_info.get("location", "")
+        }
+        self.logs = [log_entry]
+        self.log_token = log_entry["token"]
+
+    def _assign_log_token_to_scenes(self):
+        """Assign the log token to all scene records."""
+        for scene in self.scenes:
+            scene["log_token"] = getattr(self, "log_token", "")
+
     def convert_scene(self, scene_folder: str):
         """Convert a single scene folder to NuScenes format.
 
@@ -584,10 +607,12 @@ class NuScenesConverter:
         """Convert all scenes specified in the config."""
         self._generate_sensor_entries()
         self._generate_calibrated_sensors()
+        self._generate_log_entry()
         for scene_folder in self.scene_folders:
             print(f"Processing scene: {scene_folder}")
             self.convert_scene(scene_folder)
-        self._write_all_tables()  # Write all tables to include data from all scenes
+        self._assign_log_token_to_scenes()
+        self._write_all_tables()
 
     def _write_metadata(self):
         """Write all metadata files in NuScenes format."""

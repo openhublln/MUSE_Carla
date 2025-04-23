@@ -12,6 +12,7 @@ from simulation_logic import run_simulation, create_scene_folders
 from generate_bbox_annotations import process_scene
 
 EGO_POSE_FOLDER = "ego_pose"
+LOG_INFO_FILENAME = "log_info.json"
 
 def save_ego_pose(ego_vehicle, timestamp, ego_pose_dir):
     """Save the ego vehicle's pose as a JSON file in the ego_pose directory."""
@@ -33,6 +34,22 @@ def save_ego_pose(ego_vehicle, timestamp, ego_pose_dir):
     pose_path = os.path.join(ego_pose_dir, f"{timestamp}.json")
     with open(pose_path, 'w') as f:
         json.dump(pose, f, indent=2)
+
+def collect_log_info(world, ego_vehicle, base_save_path):
+    """Collects and saves simulation log info for NuScenes log.json generation."""
+    map_name = world.get_map().name.split('/')[-1]
+    vehicle_blueprint = ego_vehicle.type_id
+    date_captured = time.strftime("%Y-%m-%d")
+    logfile = f"carla_log_{date_captured}.log"
+    log_info = {
+        "logfile": logfile,
+        "vehicle": vehicle_blueprint,
+        "date_captured": date_captured,
+        "location": map_name
+    }
+    log_info_path = os.path.join(base_save_path, LOG_INFO_FILENAME)
+    with open(log_info_path, 'w') as f:
+        json.dump(log_info, f, indent=2)
 
 def main():
     """ Initialise Carla, configure les paramètres et lance les simulations """
@@ -83,6 +100,9 @@ def main():
 
         scene_paths = []  # Liste pour stocker les dossiers de scènes traitées
 
+        log_info_collected = False
+        ego_vehicle_for_log = None
+
         for scene_id in range(1, num_scenes + 1):
             scene_completed = False
             max_scene_retries = 3  # Maximum number of retries per scene
@@ -112,6 +132,12 @@ def main():
                     print("Ego vehicle spawned, waiting for stabilization...")
                     for _ in range(20):
                         world.tick()
+
+                    # Collect log info if not already collected
+                    if not log_info_collected:
+                        collect_log_info(world, vehicle, base_save_path)
+                        log_info_collected = True
+                        ego_vehicle_for_log = vehicle
 
                     # Setup ego_pose directory
                     ego_pose_dir = os.path.join(save_path, EGO_POSE_FOLDER)
