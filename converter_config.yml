@@ -86,4 +86,3 @@ attributes:
   human:
     - name: 'pedestrian.moving'
     - name: 'pedestrian.standing'
-    - name: 'pedestrian.sitting_lying_down'

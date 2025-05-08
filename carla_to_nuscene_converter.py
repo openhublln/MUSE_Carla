@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import numpy as np
 from scipy.spatial.transform import Rotation
+import carla
+import math
 
 class NuScenesConverter:
     """Converts CARLA sensor data to NuScenes format."""
@@ -42,7 +44,10 @@ class NuScenesConverter:
 
         # Set global reference frame
         self._set_global_reference_frame()
-    
+        
+        # Initialize attribute name to token mapping
+        self.attribute_name_to_token = {}
+
     def _load_config(self, config_path: str) -> dict:
         """Load and validate the converter configuration."""
         with open(config_path, 'r') as f:
@@ -705,6 +710,300 @@ class NuScenesConverter:
             self.token_maps['instance'][(scene_token, actor_id)] = instance_token
             self.instances.append(instance_entry)
 
+    def _generate_attribute_entries(self):
+        """Generate attribute.json entries based on config."""
+        print("\nGenerating attribute entries...")
+        attribute_definitions = self.config.get("attributes", {})
+        self.attributes = []
+        
+        # Process vehicle attributes
+        if "vehicle" in attribute_definitions:
+            for attr in attribute_definitions["vehicle"]:
+                token = self._generate_token()
+                attribute_entry = {
+                    "token": token,
+                    "name": attr["name"],
+                    "description": f"Vehicle state: {attr['name'].split('.')[-1]}"
+                }
+                self.attributes.append(attribute_entry)
+                # Store token for later use
+                self.attribute_name_to_token[attr["name"]] = token
+        
+        print(f"Generated {len(self.attributes)} attribute entries")
+
+    def _infer_vehicle_state(self, velocity_magnitude: float) -> str:
+        """Infer vehicle state based on velocity magnitude.
+        
+        Args:
+            velocity_magnitude: The magnitude of the vehicle's velocity.
+            
+        Returns:
+            The name of the attribute that best describes the vehicle's state.
+        """
+        # Define velocity thresholds (in m/s)
+        MOVING_THRESHOLD = 0.5  # Vehicles moving faster than this are considered "moving"
+        
+        if velocity_magnitude > MOVING_THRESHOLD:
+            return "vehicle.moving"
+        else:
+            return "vehicle.stopped"
+
+    def _get_sensor_transform(self, scene_folder, sensor_name, timestamp):
+        """Get the transform of a sensor at a specific timestamp.
+        
+        Args:
+            scene_folder: Name of the scene folder
+            sensor_name: Name of the sensor
+            timestamp: Timestamp to get transform for
+            
+        Returns:
+            Tuple of (sensor_transform, ego_transform) or (None, None) if not found
+        """
+        # Load sensor config
+        with open('config.yml', 'r') as f:
+            config = yaml.safe_load(f)
+            
+        # Find sensor config
+        sensor_config = None
+        for sensor in config["sensors"]:
+            if sensor["name"] == sensor_name:
+                sensor_config = sensor
+                break
+                
+        if sensor_config is None:
+            return None, None
+            
+        # Get ego vehicle transform at this timestamp
+        ego_pose_file = self.input_base / scene_folder / "ego_pose" / f"{timestamp}.json"
+        if not ego_pose_file.exists():
+            return None, None
+            
+        try:
+            with open(ego_pose_file, 'r') as f:
+                ego_pose = json.load(f)
+                
+            # Create ego transform
+            ego_loc = ego_pose["translation"]
+            ego_rot = ego_pose["rotation"]
+            ego_transform = carla.Transform(
+                carla.Location(x=ego_loc["x"], y=ego_loc["y"], z=ego_loc["z"]),
+                carla.Rotation(pitch=ego_rot["pitch"], yaw=ego_rot["yaw"], roll=ego_rot["roll"])
+            )
+            
+            # Create sensor transform relative to ego
+            loc = sensor_config["transform"]["location"]
+            rot = sensor_config["transform"]["rotation"]
+            sensor_transform = carla.Transform(
+                carla.Location(x=loc["x"], y=loc["y"], z=loc["z"]),
+                carla.Rotation(pitch=rot.get("pitch", 0), yaw=rot["yaw"], roll=rot.get("roll", 0))
+            )
+            
+            return sensor_transform, ego_transform
+            
+        except Exception as e:
+            print(f"Warning: Error loading transforms for {sensor_name} at {timestamp}: {e}")
+            return None, None
+
+    def _is_point_in_box(self, point, box_center, box_size, box_rotation):
+        """Check if a point is inside an oriented 3D box.
+        
+        Args:
+            point: [x, y, z] point in global frame
+            box_center: [x, y, z] center of box in global frame
+            box_size: [width, length, height] of box
+            box_rotation: quaternion [w, x, y, z] of box rotation
+            
+        Returns:
+            bool: True if point is inside box
+        """
+        # Print debug info for first point
+        if not hasattr(self, '_debug_point_printed'):
+            print(f"\nDebug - Box parameters:")
+            print(f"Box center: {box_center}")
+            print(f"Box size: {box_size}")
+            print(f"Box rotation (quaternion): {box_rotation}")
+            print(f"Point to test: {point}")
+            self._debug_point_printed = True
+        
+        # Convert point to box-local coordinates
+        point_local = point - np.array(box_center)
+        
+        # Create rotation matrix from quaternion
+        qw, qx, qy, qz = box_rotation
+        R = np.array([
+            [1 - 2*qy*qy - 2*qz*qz, 2*qx*qy - 2*qz*qw, 2*qx*qz + 2*qy*qw],
+            [2*qx*qy + 2*qz*qw, 1 - 2*qx*qx - 2*qz*qz, 2*qy*qz - 2*qx*qw],
+            [2*qx*qz - 2*qy*qw, 2*qy*qz + 2*qx*qw, 1 - 2*qx*qx - 2*qy*qy]
+        ])
+        
+        # Transform point to box-local frame
+        point_local = np.dot(R, point_local)
+        
+        # Convert box size from [width, length, height] to [x, y, z] dimensions
+        # In NuScenes: width = y, length = x, height = z
+        box_dims = np.array([box_size[1], box_size[0], box_size[2]])  # [length, width, height]
+        half_size = box_dims / 2
+        
+        # Print debug info for first point
+        if not hasattr(self, '_debug_local_printed'):
+            print(f"\nDebug - Local coordinates:")
+            print(f"Point in local frame: {point_local}")
+            print(f"Box half dimensions: {half_size}")
+            self._debug_local_printed = True
+        
+        # Check if point is inside box bounds with a small tolerance
+        tolerance = 0.1  # Increased tolerance to 10cm
+        is_inside = all(abs(point_local) <= half_size + tolerance)
+        
+        # Print debug info for first point
+        if not hasattr(self, '_debug_result_printed'):
+            print(f"\nDebug - Point-in-box test:")
+            print(f"X check: {abs(point_local[0])} <= {half_size[0] + tolerance}")
+            print(f"Y check: {abs(point_local[1])} <= {half_size[1] + tolerance}")
+            print(f"Z check: {abs(point_local[2])} <= {half_size[2] + tolerance}")
+            print(f"Final result: {is_inside}")
+            self._debug_result_printed = True
+        
+        return is_inside
+
+    def _count_points_in_box(self, points, box_center, box_size, box_rotation):
+        """Count how many points fall inside a 3D box.
+        
+        Args:
+            points: numpy array of points [N x 3] or [N x 4] (with intensity)
+            box_center: [x, y, z] center of box in global frame
+            box_size: [width, length, height] of box
+            box_rotation: quaternion [w, x, y, z] of box rotation
+            
+        Returns:
+            int: Number of points inside box
+        """
+        # Reset debug flags for new box
+        if hasattr(self, '_debug_point_printed'):
+            delattr(self, '_debug_point_printed')
+        if hasattr(self, '_debug_local_printed'):
+            delattr(self, '_debug_local_printed')
+        if hasattr(self, '_debug_result_printed'):
+            delattr(self, '_debug_result_printed')
+        
+        # Handle points with or without intensity
+        point_positions = points[:, :3]
+        
+        # Count points inside box
+        count = 0
+        for point in point_positions:
+            if self._is_point_in_box(point, box_center, box_size, box_rotation):
+                count += 1
+        
+        # Print summary for this box
+        print(f"\nBox summary:")
+        print(f"Total points tested: {len(point_positions)}")
+        print(f"Points inside box: {count}")
+        
+        return count
+
+    def _transform_points_to_global(self, points, sensor_transform, ego_transform):
+        """Transform points from sensor frame to global frame.
+        
+        Args:
+            points: numpy array of points [N x 3] or [N x 4] (with intensity)
+            sensor_transform: CARLA transform of the sensor relative to ego
+            ego_transform: CARLA transform of the ego vehicle
+            
+        Returns:
+            Transformed points in global frame
+        """
+        # Get transform matrices
+        sensor_matrix = np.array(sensor_transform.get_matrix())
+        ego_matrix = np.array(ego_transform.get_matrix())
+        
+        # Handle points with or without intensity
+        has_intensity = points.shape[1] == 4
+        point_positions = points[:, :3]
+        
+        # Add homogeneous coordinate
+        point_positions_h = np.column_stack((point_positions, np.ones(len(points))))
+        
+        # Transform points: sensor -> ego -> global
+        points_ego = np.dot(point_positions_h, sensor_matrix.T)
+        points_global = np.dot(points_ego, ego_matrix.T)
+        
+        # Combine with intensity if present
+        if has_intensity:
+            return np.column_stack((points_global[:, :3], points[:, 3]))
+        return points_global[:, :3]
+
+    def _transform_radar_points_to_global(self, radar_points, sensor_transform, ego_transform):
+        """Transform radar points from spherical to global frame.
+        
+        Args:
+            radar_points: numpy array of radar points [N x 5] (depth, elevation, azimuth, velocity, intensity)
+            sensor_transform: CARLA transform of the sensor relative to ego
+            ego_transform: CARLA transform of the ego vehicle
+            
+        Returns:
+            Transformed points in global frame [N x 3]
+        """
+        # Validate input
+        if radar_points.size == 0:
+            print("Warning: Empty radar points array")
+            return np.array([])
+        
+        if radar_points.shape[1] != 5:
+            print(f"Warning: Unexpected radar points shape {radar_points.shape}, expected (N, 5)")
+            return np.array([])
+        
+        # Print some debug info about the radar points
+        print(f"Processing {len(radar_points)} radar points")
+        print(f"Depth range: [{np.min(radar_points[:, 0]):.2f}, {np.max(radar_points[:, 0]):.2f}]")
+        print(f"Elevation range: [{np.min(radar_points[:, 1]):.2f}, {np.max(radar_points[:, 1]):.2f}]")
+        print(f"Azimuth range: [{np.min(radar_points[:, 2]):.2f}, {np.max(radar_points[:, 2]):.2f}]")
+        
+        # Convert spherical to Cartesian in sensor frame
+        points = []
+        for point in radar_points:
+            depth, elevation, azimuth, velocity, intensity = point
+            
+            # Validate angles
+            if not (-90 <= elevation <= 90):
+                print(f"Warning: Invalid elevation angle {elevation}")
+                continue
+            if not (-180 <= azimuth <= 180):
+                print(f"Warning: Invalid azimuth angle {azimuth}")
+                continue
+            if depth <= 0:
+                print(f"Warning: Invalid depth {depth}")
+                continue
+            
+            # Convert to radians
+            elevation_rad = math.radians(elevation)
+            azimuth_rad = math.radians(azimuth)
+            
+            # Convert to Cartesian
+            x = depth * math.cos(elevation_rad) * math.cos(azimuth_rad)
+            y = depth * math.cos(elevation_rad) * math.sin(azimuth_rad)
+            z = depth * math.sin(elevation_rad)
+            
+            points.append([x, y, z])
+        
+        if not points:
+            print("Warning: No valid radar points after conversion")
+            return np.array([])
+        
+        points = np.array(points)
+        
+        # Transform to global frame
+        global_points = self._transform_points_to_global(points, sensor_transform, ego_transform)
+        
+        # Print some debug info about the transformed points
+        if len(global_points) > 0:
+            print(f"Transformed {len(global_points)} points to global frame")
+            print(f"Global points range: X[{np.min(global_points[:, 0]):.2f}, {np.max(global_points[:, 0]):.2f}], "
+                  f"Y[{np.min(global_points[:, 1]):.2f}, {np.max(global_points[:, 1]):.2f}], "
+                  f"Z[{np.min(global_points[:, 2]):.2f}, {np.max(global_points[:, 2]):.2f}]")
+        
+        return global_points
+
     def _generate_sample_annotations(self, scene_folder: str, scene_token: str):
         """Generate sample_annotation.json entries for a scene based on 3dbbox data.
         
@@ -785,23 +1084,75 @@ class NuScenesConverter:
                             float(rotation.get("yaw", 0))
                         )
                         
+                        # Get velocity and infer vehicle state
+                        velocity = annotation.get("velocity", {})
+                        velocity_magnitude = velocity.get("magnitude", 0.0)
+                        vehicle_state = self._infer_vehicle_state(velocity_magnitude)
+                        attribute_token = self.attribute_name_to_token.get(vehicle_state, "")
+                        
+                        # Get box parameters
+                        box_center = [
+                            float(translation.get("x", 0)),
+                            float(translation.get("y", 0)),
+                            float(translation.get("z", 0))
+                        ]
+                        box_size = annotation.get("size", [0, 0, 0])
+                        
+                        # Count lidar points
+                        num_lidar_pts = 0
+                        lidar_file = scene_path / "Lidar" / f"{timestamp}.npy"
+                        if lidar_file.exists():
+                            try:
+                                # Load lidar points (x, y, z, intensity)
+                                lidar_points = np.load(lidar_file)
+                                
+                                # Get transforms
+                                sensor_transform, ego_transform = self._get_sensor_transform(scene_folder, "Lidar", timestamp)
+                                if sensor_transform is not None and ego_transform is not None:
+                                    # Transform points to global frame
+                                    global_points = self._transform_points_to_global(lidar_points, sensor_transform, ego_transform)
+                                    
+                                    # Count points in box
+                                    num_lidar_pts = self._count_points_in_box(global_points, box_center, box_size, quaternion)
+                            except Exception as e:
+                                print(f"Warning: Error processing lidar points: {e}")
+                        
+                        # Count radar points
+                        num_radar_pts = 0
+                        for radar_name in ["Radar_Front", "Radar_Back", "Radar_FrontRight", "Radar_FrontLeft", "Radar_BackRight", "Radar_BackLeft"]:
+                            radar_file = scene_path / radar_name / f"{timestamp}.npy"
+                            if radar_file.exists():
+                                try:
+                                    # Load radar points (depth, elevation, azimuth, velocity, intensity)
+                                    radar_points = np.load(radar_file)
+                                    
+                                    # Get transforms
+                                    sensor_transform, ego_transform = self._get_sensor_transform(scene_folder, radar_name, timestamp)
+                                    if sensor_transform is not None and ego_transform is not None:
+                                        # Transform points to global frame
+                                        global_points = self._transform_radar_points_to_global(radar_points, sensor_transform, ego_transform)
+                                        
+                                        if len(global_points) > 0:
+                                            # Count points in box
+                                            box_count = self._count_points_in_box(global_points, box_center, box_size, quaternion)
+                                            num_radar_pts += box_count
+                                            print(f"Radar {radar_name}: Found {box_count} points in box")
+                                except Exception as e:
+                                    print(f"Warning: Error processing radar points for {radar_name}: {e}")
+                        
                         # Create annotation entry
                         annotation_token = self._generate_token()
                         annotation_entry = {
                             "token": annotation_token,
                             "sample_token": sample_token,
                             "instance_token": instance_token,
-                            "attribute_tokens": [],  # TODO: Will be populated later
+                            "attribute_tokens": [attribute_token] if attribute_token else [],
                             "visibility_token": "",  # TODO: Will be populated later
-                            "translation": [
-                                float(translation.get("x", 0)),
-                                float(translation.get("y", 0)),
-                                float(translation.get("z", 0))
-                            ],
-                            "size": [0, 0, 0],  # TODO: Will be populated later
+                            "translation": box_center,
+                            "size": box_size,
                             "rotation": quaternion,
-                            "num_lidar_pts": None,  # TODO: Will be populated later
-                            "num_radar_pts": None,  # TODO: Will be populated later
+                            "num_lidar_pts": num_lidar_pts,
+                            "num_radar_pts": num_radar_pts,
                             "next": "",  # Will be populated after all annotations are processed
                             "prev": ""   # Will be populated after all annotations are processed
                         }
@@ -961,6 +1312,7 @@ class NuScenesConverter:
         self._generate_calibrated_sensors()
         self._generate_log_entry()
         self._generate_category_entries()
+        self._generate_attribute_entries()  # Generate attributes before processing scenes
         for scene_folder in self.scene_folders:
             print(f"Processing scene: {scene_folder}")
             self.convert_scene(scene_folder)

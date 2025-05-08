@@ -82,7 +82,7 @@ def main():
         world = client.get_world()
         settings = world.get_settings()
         settings.synchronous_mode = True
-        settings.fixed_delta_seconds = 0.05  # 20Hz
+        settings.fixed_delta_seconds = 0.05  # 20Hz simulation
         world.apply_settings(settings)
 
         # Setup traffic before starting sensor collection
@@ -161,13 +161,46 @@ def main():
                                     sensor_callback(data, q, name, path, w, v, s))
 
                     # Run simulation and collect ego pose at each tick
+                    print(f"\nStarting data collection for scene {scene_id}...")
+                    print(f"Expected frames: {ticks_per_scene} (20Hz for {seconds_per_scene} seconds)")
+                    
                     for tick in range(ticks_per_scene):
                         world.tick()
                         snapshot = world.get_snapshot()
                         timestamp = int(snapshot.timestamp.elapsed_seconds * 1000)
                         save_ego_pose(vehicle, timestamp, ego_pose_dir)
-                        # Sensors are handled asynchronously by their callbacks
+                        
+                        # Add a small delay between ticks to ensure sensor callbacks complete
+                        time.sleep(0.01)  # 10ms delay between ticks
+                        
+                        if tick % 10 == 0:  # Progress update every 10 frames
+                            print(f"Collected {tick + 1}/{ticks_per_scene} frames")
 
+                    # Wait for all sensor callbacks to complete
+                    print("Waiting for sensor callbacks to complete...")
+                    expected_calls = len(sensor_list) * ticks_per_scene
+                    completed_calls = 0
+                    timeout_counter = 0
+                    max_timeouts = 10  # Increased max timeouts
+                    
+                    while completed_calls < expected_calls and timeout_counter < max_timeouts:
+                        try:
+                            timestamp, sensor_name = sensor_queue.get(timeout=5.0)  # Increased timeout
+                            if timestamp > 0:  # Valid timestamp
+                                completed_calls += 1
+                                if completed_calls % 100 == 0:  # Progress update every 100 calls
+                                    print(f"Completed {completed_calls}/{expected_calls} sensor callbacks")
+                        except Empty:
+                            timeout_counter += 1
+                            print(f"Warning: Timeout {timeout_counter}/{max_timeouts} waiting for sensor callback. Completed {completed_calls}/{expected_calls}")
+                            if timeout_counter >= max_timeouts:
+                                print("Max timeouts reached, proceeding with cleanup")
+                                break
+
+                    # Add a longer delay before cleanup to ensure all file operations are complete
+                    print("Waiting for file operations to complete...")
+                    time.sleep(5.0)  # Increased wait time
+                    
                     scene_completed = True
                     break  # Scene completed successfully, exit retry loop
 
@@ -179,13 +212,29 @@ def main():
                     else:
                         print("Max retries reached, skipping scene")
                 finally:
+                    # Add a longer delay before cleanup to allow pending operations
+                    print("Waiting before cleanup...")
+                    time.sleep(5.0)  # Increased wait time
+                    
                     # Cleanup if needed
-                    if 'vehicle' in locals() and vehicle is not None and vehicle.is_alive:
-                        vehicle.destroy()
+                    if 'vehicle' in locals() and vehicle is not None:
+                        try:
+                            vehicle.get_transform()  # Check if vehicle is still alive
+                            vehicle.destroy()
+                        except Exception:
+                            print("Vehicle already destroyed")
+                            
                     if 'sensor_list' in locals():
                         for sensor in sensor_list:
-                            if sensor.is_alive:
+                            try:
+                                sensor.get_transform()  # Check if sensor is still alive
                                 sensor.destroy()
+                            except Exception:
+                                print(f"Sensor {sensor.type_id} already destroyed")
+                    
+                    # Add another delay after cleanup
+                    print("Waiting after cleanup...")
+                    time.sleep(5.0)  # Increased wait time
 
             if not scene_completed:
                 print(f"Failed to complete scene {scene_id} after {max_scene_retries} attempts")

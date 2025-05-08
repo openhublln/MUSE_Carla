@@ -101,10 +101,13 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
         try:
              bb = actor.bounding_box
              verts = list(bb.get_world_vertices(actor_transform))
+             # Get bounding box dimensions
+             extent = bb.extent
+             # Convert to NuScenes format: [width, length, height]
+             size = [extent.y * 2, extent.x * 2, extent.z * 2]  # CARLA x,y,z -> NuScenes width,length,height
         except AttributeError:
              print(f"Warning: Actor ID {actor.id} of type {actor.type_id} lacks 'bounding_box'. Skipping.")
              continue
-
 
         # --- Project Vertices ---
         projected_vertices = [get_image_point(v, K, w2c) for v in verts]
@@ -174,7 +177,8 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
                 "z": velocity.z,
                 "magnitude": velocity_magnitude
             },
-            "pose": actor_pose
+            "pose": actor_pose,
+            "size": size  # Add bounding box dimensions
         })
 
     # --- Save to JSON ---
