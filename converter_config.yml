@@ -10,7 +10,7 @@ input:
 output:
   base_dir: 'nuscenes_format'  # Output directory for NuScenes format data
   maintain_folder_structure: true  # Keep original scene folder structure
-  keyframe_rate: 10.0  # Updated target keyframe rate to 10 Hz
+  keyframe_rate: 20.0  # Updated target keyframe rate to 10 Hz
 
 # Keyframe settings
 keyframe:

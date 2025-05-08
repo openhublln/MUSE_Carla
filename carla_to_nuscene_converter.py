@@ -205,16 +205,28 @@ class NuScenesConverter:
             mapping sensor names to file paths.
         """
         organized_data = {}
+        total_files = 0
 
         for sensor_name, files in data_files.items():
             for file_path in files:
                 # Extract timestamp from the file name (assumes format: <timestamp>_suffix.ext)
-                timestamp = int(Path(file_path).stem.split('_')[0])
+                try:
+                    timestamp = int(Path(file_path).stem.split('_')[0])
+                    total_files += 1
 
-                if timestamp not in organized_data:
-                    organized_data[timestamp] = {}
+                    if timestamp not in organized_data:
+                        organized_data[timestamp] = {}
 
-                organized_data[timestamp][sensor_name] = file_path
+                    organized_data[timestamp][sensor_name] = file_path
+                except (ValueError, IndexError) as e:
+                    print(f"Warning: Could not extract timestamp from {file_path}: {e}")
+                    continue
+
+        print(f"\nOrganized {total_files} files into {len(organized_data)} unique timestamps")
+        if organized_data:
+            timestamps = sorted(organized_data.keys())
+            print(f"Timestamp range: {timestamps[0]} to {timestamps[-1]}")
+            print(f"Average interval: {(timestamps[-1] - timestamps[0]) / (len(timestamps) - 1):.2f}ms")
 
         return organized_data
 
@@ -234,44 +246,81 @@ class NuScenesConverter:
         # Ensure timestamps are sorted
         timestamps.sort()
 
-        # Calculate the interval in microseconds (1 second = 1e6 microseconds)
-        interval = int(1e6 / target_rate)
+        # Calculate the interval between frames (assuming timestamps are in milliseconds)
+        interval = int(1000 / target_rate)  # Convert to milliseconds
         keyframes = [timestamps[0]]  # Always include the first timestamp
+        
+        # Find all bbox files to ensure we prioritize frames with annotations
+        bbox_timestamps = set()
+        scene_path = self.input_base
+        for sensor_folder in scene_path.iterdir():
+            if not sensor_folder.is_dir():
+                continue
+            bbox_files = list(sensor_folder.glob("*_3dbbox.json"))
+            for bbox_file in bbox_files:
+                try:
+                    if bbox_file.stat().st_size > 2:  # Skip empty files
+                        ts = int(bbox_file.stem.split('_')[0])
+                        bbox_timestamps.add(ts)
+                except (ValueError, IndexError):
+                    continue
 
-        last_keyframe_ts = timestamps[0]
+        print(f"Found {len(bbox_timestamps)} timestamps with valid bbox annotations")
+        
+        last_keyframe = timestamps[0]
         for ts in timestamps[1:]:
-            # Select if the interval has passed since the last selected keyframe
-            if ts - last_keyframe_ts >= interval:
-                keyframes.append(ts)
-                last_keyframe_ts = ts  # Update the last selected timestamp
+            time_diff = ts - last_keyframe
+            
+            # If we've passed the interval, select the next keyframe
+            if time_diff >= interval:
+                # Prioritize timestamps that have bbox annotations
+                candidates = [t for t in timestamps if t > last_keyframe and t <= ts]
+                
+                # First try to find a candidate with bbox data
+                bbox_candidates = [t for t in candidates if t in bbox_timestamps]
+                if bbox_candidates:
+                    next_keyframe = min(bbox_candidates, key=lambda x: abs(x - (last_keyframe + interval)))
+                else:
+                    # If no bbox data available, just take the closest to the ideal interval
+                    next_keyframe = min(candidates, key=lambda x: abs(x - (last_keyframe + interval)))
+                
+                if next_keyframe not in keyframes:
+                    keyframes.append(next_keyframe)
+                    last_keyframe = next_keyframe
 
+        print(f"Selected {len(keyframes)} keyframes from {len(timestamps)} total timestamps")
+        print(f"Keyframe timestamps: {keyframes}")
         return keyframes
 
     def _generate_sample_entries(self, keyframes: List[int], scene_token: str) -> List[dict]:
-            """Generate `sample.json` entries for the selected keyframes for a single scene.
+        """Generate `sample.json` entries for the selected keyframes for a single scene.
 
-            Args:
-                keyframes: A list of selected keyframe timestamps for this scene.
-                scene_token: The token of the scene to which these samples belong.
+        Args:
+            keyframes: A list of selected keyframe timestamps for this scene.
+            scene_token: The token of the scene to which these samples belong.
 
-            Returns:
-                A list of sample dictionaries generated for this scene.
-            """
-            scene_samples = []
-            for timestamp in keyframes:
-                sample_token = self._generate_token() # Generate token here
-                sample = {
-                    "token": sample_token,
-                    "timestamp": timestamp,
-                    "scene_token": scene_token,
-                    "prev": "", # Will be filled later
-                    "next": "", # Will be filled later
-                }
-                scene_samples.append(sample)
-                # Add token mapping for easy lookup if needed later
-                self.token_maps['sample'][timestamp] = sample_token
+        Returns:
+            A list of sample dictionaries generated for this scene.
+        """
+        scene_samples = []
+        for i, timestamp in enumerate(keyframes):
+            sample_token = self._generate_token()
+            sample = {
+                "token": sample_token,
+                "timestamp": timestamp,
+                "scene_token": scene_token,
+                "prev": scene_samples[-1]["token"] if i > 0 else "",  # Link to previous sample
+                "next": "",  # Will be updated in next iteration
+            }
+            # Update previous sample's next token
+            if i > 0:
+                scene_samples[-1]["next"] = sample_token
+            
+            scene_samples.append(sample)
+            # Add token mapping for easy lookup if needed later
+            self.token_maps['sample'][timestamp] = sample_token
 
-            return scene_samples
+        return scene_samples
 
     def _euler_to_quaternion(self, roll: float, pitch: float, yaw: float) -> List[float]:
         """Convert Euler angles (roll, pitch, yaw) to a Quaternion (w, x, y, z).
@@ -398,6 +447,90 @@ class NuScenesConverter:
             for folder, channel in mapping.items():
                 sensor_folder_to_channel[folder] = channel
         simulation_sensors = self.sim_config.get("sensors", [])
+        
+        # Get all sample tokens for this scene and their timestamps
+        scene_samples = [entry for entry in self.samples if entry["scene_token"] == scene_token]
+        sample_timestamps = {entry["timestamp"]: entry["token"] for entry in scene_samples}
+        keyframe_timestamps = set(sample_timestamps.keys())
+        
+        # Get all timestamps from sensor data files
+        all_sensor_timestamps = set()
+        for sensor in simulation_sensors:
+            sensor_name = sensor["name"]
+            sensor_folder = scene_path / sensor_name
+            if not sensor_folder.exists() or not sensor_folder.is_dir():
+                continue
+            if sensor["type"] == "camera":
+                ext = ".png"
+            elif sensor["type"] in ("lidar", "semantic_lidar", "radar"):
+                ext = ".npy"
+            elif sensor["type"] in ("imu", "gnss"):
+                ext = ".json"
+            else:
+                continue
+            files = [f for f in sensor_folder.glob(f"*{ext}") if f.is_file()]
+            for file in files:
+                try:
+                    timestamp = int(file.stem)
+                    all_sensor_timestamps.add(timestamp)
+                except Exception:
+                    continue
+        
+        # Process ego pose entries
+        ego_pose_dir = scene_path / "ego_pose"
+        ego_pose_timestamps = {}
+        ego_pose_files_processed = 0
+        ego_pose_files_skipped = 0
+        skipped_timestamps = set()
+        
+        if ego_pose_dir.exists() and ego_pose_dir.is_dir():
+            for pose_file in ego_pose_dir.glob("*.json"):
+                try:
+                    with open(pose_file, "r") as f:
+                        pose_data = json.load(f)
+                    timestamp = pose_data["timestamp"]
+                    
+                    # Create ego pose entry regardless of sensor data
+                    translation = [
+                        float(pose_data["translation"]["x"]),
+                        float(pose_data["translation"]["y"]),
+                        0.0  # Force Z=0 for ego pose
+                    ]
+                    roll = float(pose_data["rotation"]["roll"])
+                    pitch = float(pose_data["rotation"]["pitch"])
+                    yaw = float(pose_data["rotation"]["yaw"])
+                    quaternion = self._euler_to_quaternion(roll, pitch, yaw)
+                    token = self._generate_token()
+                    ego_pose_entry = {
+                        "token": token,
+                        "translation": translation,
+                        "rotation": quaternion,
+                        "timestamp": timestamp
+                    }
+                    self.ego_poses.append(ego_pose_entry)
+                    ego_pose_timestamps[timestamp] = token
+                    ego_pose_files_processed += 1
+                    
+                    # Log if this timestamp doesn't have sensor data
+                    if timestamp not in all_sensor_timestamps:
+                        skipped_timestamps.add(timestamp)
+                        ego_pose_files_skipped += 1
+                        
+                except Exception as e:
+                    print(f"Warning: Error processing ego pose file {pose_file}: {e}")
+                    continue
+        
+        print(f"\nEgo pose processing summary for scene {scene_folder}:")
+        print(f"Total ego pose files processed: {ego_pose_files_processed}")
+        print(f"Ego pose files without sensor data: {ego_pose_files_skipped}")
+        if skipped_timestamps:
+            print(f"Skipped timestamps: {sorted(skipped_timestamps)}")
+        
+        print(f"\nFound {len(scene_samples)} samples for scene {scene_folder}")
+        print(f"Found {len(ego_pose_timestamps)} ego pose entries")
+        print(f"Found {len(all_sensor_timestamps)} sensor data timestamps")
+        print(f"Keyframe timestamps: {sorted(keyframe_timestamps)}")
+        
         for sensor in simulation_sensors:
             sensor_name = sensor["name"]
             sensor_type = sensor["type"]
@@ -438,26 +571,38 @@ class NuScenesConverter:
             for file in files:
                 try:
                     timestamp = int(file.stem)
-                except Exception:
+                    
+                    # Find the closest keyframe sample token
+                    closest_keyframe = min(keyframe_timestamps, key=lambda x: abs(x - timestamp))
+                    sample_token = sample_timestamps[closest_keyframe]
+                    
+                    # Check if this is a keyframe
+                    is_key_frame = timestamp in keyframe_timestamps
+                    
+                    # Get ego pose token if available
+                    ego_pose_token = ego_pose_timestamps.get(timestamp, "")
+                    
+                    token = self._generate_token()
+                    entry = {
+                        "token": token,
+                        "sample_token": sample_token,
+                        "ego_pose_token": ego_pose_token,
+                        "calibrated_sensor_token": calibrated_sensor_token,
+                        "filename": str(file.relative_to(self.input_base)),
+                        "fileformat": fileformat,
+                        "width": width,
+                        "height": height,
+                        "timestamp": timestamp,
+                        "is_key_frame": is_key_frame,
+                        "next": "",
+                        "prev": ""
+                    }
+                    entries.append(entry)
+                except Exception as e:
+                    print(f"Warning: Error processing file {file}: {e}")
                     continue
-                token = self._generate_token()
-                sample_token = self.token_maps.get('sample', {}).get(timestamp, "")
-                ego_pose_token = {entry["timestamp"]: entry["token"] for entry in self.ego_poses}.get(timestamp, "")
-                entry = {
-                    "token": token,
-                    "sample_token": sample_token,
-                    "ego_pose_token": ego_pose_token,
-                    "calibrated_sensor_token": calibrated_sensor_token,
-                    "filename": str(file.relative_to(self.input_base)),
-                    "fileformat": fileformat,
-                    "width": width,
-                    "height": height,
-                    "timestamp": timestamp,
-                    "is_key_frame": False,
-                    "next": "",
-                    "prev": ""
-                }
-                entries.append(entry)
+                
+            # Link next/prev tokens
             for i, entry in enumerate(entries):
                 if i > 0:
                     entry["prev"] = entries[i-1]["token"]
@@ -512,6 +657,9 @@ class NuScenesConverter:
             bbox_files = list(sensor_folder.glob("*_3dbbox.json"))
             for bbox_file in bbox_files:
                 try:
+                    if bbox_file.stat().st_size <= 2:  # Skip empty files
+                        continue
+                        
                     with open(bbox_file, 'r') as f:
                         bbox_data = json.load(f)
                         
@@ -526,6 +674,8 @@ class NuScenesConverter:
                 except Exception as e:
                     print(f"Error reading bbox file {bbox_file}: {e}")
                     continue
+        
+        print(f"Found {len(unique_actors)} unique actors in scene {scene_folder}")
         
         # Generate instance entries for each unique actor
         for actor_id, actor_type in unique_actors:
@@ -542,15 +692,160 @@ class NuScenesConverter:
                 continue
             
             # Generate instance entry
+            instance_token = self._generate_token()
             instance_entry = {
-                "token": self._generate_token(),
+                "token": instance_token,
                 "category_token": category_token,
                 "nbr_annotations": None,  # TODO: Will be populated later
                 "first_annotation_token": None,  # TODO: Will be populated later
                 "last_annotation_token": None  # TODO: Will be populated later
             }
             
+            # Store the instance token in the mapping
+            self.token_maps['instance'][(scene_token, actor_id)] = instance_token
             self.instances.append(instance_entry)
+
+    def _generate_sample_annotations(self, scene_folder: str, scene_token: str):
+        """Generate sample_annotation.json entries for a scene based on 3dbbox data.
+        
+        Args:
+            scene_folder: Name of the scene folder
+            scene_token: Token of the scene
+        """
+        print(f"\nGenerating sample annotations for scene {scene_folder}")
+        
+        # Build mappings for linking - only use samples from this scene
+        sample_token_map = {entry["timestamp"]: entry["token"] for entry in self.samples if entry["scene_token"] == scene_token}
+        print(f"Found {len(sample_token_map)} samples to process")
+        print(f"Sample timestamps: {sorted(sample_token_map.keys())}")
+        
+        # Track annotations per instance for next/prev linking
+        instance_annotations = {}  # instance_token -> list of (timestamp, annotation_token)
+        
+        # Find all 3dbbox JSON files in the scene
+        scene_path = self.input_base / scene_folder
+        bbox_files_found = 0
+        empty_files = 0
+        annotations_processed = 0
+        skipped_timestamps = 0
+        
+        for sensor_folder in scene_path.iterdir():
+            if not sensor_folder.is_dir():
+                continue
+                
+            print(f"\nProcessing sensor folder: {sensor_folder.name}")
+            
+            # Look for 3dbbox JSON files
+            bbox_files = list(sensor_folder.glob("*_3dbbox.json"))
+            bbox_files_found += len(bbox_files)
+            
+            for bbox_file in bbox_files:
+                try:
+                    # Skip empty files (2 bytes or less)
+                    if bbox_file.stat().st_size <= 2:
+                        empty_files += 1
+                        continue
+                        
+                    # Extract timestamp from filename
+                    timestamp = int(bbox_file.stem.split('_')[0])
+                    sample_token = sample_token_map.get(timestamp)
+                    if not sample_token:
+                        skipped_timestamps += 1
+                        continue
+                        
+                    with open(bbox_file, 'r') as f:
+                        bbox_data = json.load(f)
+                        
+                    if not bbox_data:  # Skip if file is empty list
+                        empty_files += 1
+                        continue
+                        
+                    # Process each annotation in the file
+                    for annotation in bbox_data:
+                        actor_id = annotation.get("actor_id")
+                        if actor_id is None:
+                            print(f"Warning: Missing actor_id in annotation from {bbox_file}")
+                            continue
+                            
+                        # Get instance token from mapping
+                        instance_token = self.token_maps['instance'].get((scene_token, actor_id))
+                        if not instance_token:
+                            print(f"Warning: No instance token found for actor {actor_id}")
+                            continue
+                            
+                        # Extract pose data
+                        pose = annotation.get("pose", {})
+                        translation = pose.get("translation", {})
+                        rotation = pose.get("rotation", {})
+                        
+                        # Convert rotation from Euler to Quaternion
+                        quaternion = self._euler_to_quaternion(
+                            float(rotation.get("roll", 0)),
+                            float(rotation.get("pitch", 0)),
+                            float(rotation.get("yaw", 0))
+                        )
+                        
+                        # Create annotation entry
+                        annotation_token = self._generate_token()
+                        annotation_entry = {
+                            "token": annotation_token,
+                            "sample_token": sample_token,
+                            "instance_token": instance_token,
+                            "attribute_tokens": [],  # TODO: Will be populated later
+                            "visibility_token": "",  # TODO: Will be populated later
+                            "translation": [
+                                float(translation.get("x", 0)),
+                                float(translation.get("y", 0)),
+                                float(translation.get("z", 0))
+                            ],
+                            "size": [0, 0, 0],  # TODO: Will be populated later
+                            "rotation": quaternion,
+                            "num_lidar_pts": None,  # TODO: Will be populated later
+                            "num_radar_pts": None,  # TODO: Will be populated later
+                            "next": "",  # Will be populated after all annotations are processed
+                            "prev": ""   # Will be populated after all annotations are processed
+                        }
+                        
+                        # Add to instance tracking
+                        if instance_token not in instance_annotations:
+                            instance_annotations[instance_token] = []
+                        instance_annotations[instance_token].append((timestamp, annotation_token))
+                        
+                        self.sample_annotations.append(annotation_entry)
+                        annotations_processed += 1
+                        
+                except Exception as e:
+                    print(f"Error processing bbox file {bbox_file}: {e}")
+                    continue
+        
+        print(f"\nSummary for scene {scene_folder}:")
+        print(f"Total bbox files found: {bbox_files_found}")
+        print(f"Empty/invalid files: {empty_files}")
+        print(f"Skipped timestamps (no sample token): {skipped_timestamps}")
+        print(f"Successfully processed annotations: {annotations_processed}")
+        print(f"Unique instances with annotations: {len(instance_annotations)}")
+        
+        # Link next/prev tokens for each instance
+        for instance_token, annotations in instance_annotations.items():
+            # Sort by timestamp
+            annotations.sort(key=lambda x: x[0])
+            
+            # Link annotations
+            for i, (_, annotation_token) in enumerate(annotations):
+                annotation = next(a for a in self.sample_annotations if a["token"] == annotation_token)
+                
+                if i > 0:
+                    prev_token = annotations[i-1][1]
+                    annotation["prev"] = prev_token
+                    
+                if i < len(annotations) - 1:
+                    next_token = annotations[i+1][1]
+                    annotation["next"] = next_token
+        
+        if not self.sample_annotations:
+            print("Warning: No sample annotations were generated!")
+        else:
+            print(f"Successfully generated {len(self.sample_annotations)} sample annotations")
 
     def convert_scene(self, scene_folder: str):
         """Convert a single scene folder to NuScenes format.
@@ -577,99 +872,30 @@ class NuScenesConverter:
         # Generate instance entries for this scene
         self._generate_instance_entries(scene_folder, scene_token)
 
-        # --- EGO POSE EXTRACTION ---
-        ego_pose_dir = self.input_base / scene_folder / "ego_pose"
-        if ego_pose_dir.exists() and ego_pose_dir.is_dir():
-            for pose_file in sorted(ego_pose_dir.glob("*.json")):
-                with open(pose_file, "r") as f:
-                    pose_data = json.load(f)
-                timestamp = pose_data["timestamp"]
-                translation = [
-                    float(pose_data["translation"]["x"]),
-                    float(pose_data["translation"]["y"]),
-                    0.0
-                ]
-                roll = float(pose_data["rotation"]["roll"])
-                pitch = float(pose_data["rotation"]["pitch"])
-                yaw = float(pose_data["rotation"]["yaw"])
-                quaternion = self._euler_to_quaternion(roll, pitch, yaw)
-                token = self._generate_token()
-                ego_pose_entry = {
-                    "token": token,
-                    "translation": translation,
-                    "rotation": quaternion,
-                    "timestamp": timestamp
-                }
-                self.ego_poses.append(ego_pose_entry)
-
-        # Select keyframes
+        # Select keyframes first
         target_rate = self.config['output']['keyframe_rate']
-        keyframes = self._select_keyframes(list(organized_data.keys()), target_rate) # Pass only keys
+        keyframes = self._select_keyframes(list(organized_data.keys()), target_rate)
         if not keyframes:
              print(f"Warning: No keyframes selected for scene {scene_folder}. Skipping sample generation.")
-             # Still generate the scene entry, but with 0 samples
-             scene_token = self._generate_token()
-             self.token_maps['scene'][scene_folder] = scene_token # Map scene name to token
-             self.scenes.append({
-                 "token": scene_token,
-                 "log_token": "", # Assign log token later if needed
-                 "name": scene_folder,
-                 "description": f"Scene data for {scene_folder} (no keyframes)",
-                 "nbr_samples": 0,
-                 "first_sample_token": "",
-                 "last_sample_token": "",
-             })
              return
 
-        # Generate scene token and map it
-        scene_token = self._generate_token()
-        self.token_maps['scene'][scene_folder] = scene_token # Map scene name to token
-
-        # Ensure all timestamps are processed
-        for timestamp in sorted(organized_data.keys()):
-            if timestamp not in keyframes:
-                keyframes.append(timestamp)  # Add missing timestamps to keyframes
-
-        # Generate sample entries for *this scene*
+        # Generate sample entries for this scene
         scene_samples = self._generate_sample_entries(keyframes, scene_token)
+        self.samples.extend(scene_samples)
 
-        # --- Link prev/next within the scene's samples ---
-        if scene_samples:
-            for i in range(len(scene_samples)):
-                if i > 0:
-                    scene_samples[i]["prev"] = scene_samples[i-1]["token"]
-                else:
-                    scene_samples[i]["prev"] = ""  # First sample has no prev
+        # Generate sample annotations after samples are created
+        self._generate_sample_annotations(scene_folder, scene_token)
 
-                if i < len(scene_samples) - 1:
-                    scene_samples[i]["next"] = scene_samples[i+1]["token"]
-                else:
-                    scene_samples[i]["next"] = ""  # Last sample has no next
-
-            # Append the correctly linked samples to the global list
-            self.samples.extend(scene_samples)  # Ensure all samples are added to the global list
-
-            # --- Create the scene record ---
-            self.scenes.append({
-                "token": scene_token,
-                "log_token": "",  # Assign log token later if needed
-                "name": scene_folder,
-                "description": f"Scene data for {scene_folder}",
-                "nbr_samples": len(scene_samples),
-                "first_sample_token": scene_samples[0]["token"],
-                "last_sample_token": scene_samples[-1]["token"],
-            })
-        else:
-            # Handle case where keyframes were selected but sample generation failed (shouldn't happen with current logic)
-             self.scenes.append({
-                 "token": scene_token,
-                 "log_token": "", # Assign log token later if needed
-                 "name": scene_folder,
-                 "description": f"Scene data for {scene_folder} (generation failed)",
-                 "nbr_samples": 0,
-                 "first_sample_token": "",
-                 "last_sample_token": "",
-             })
+        # --- Create the scene record ---
+        self.scenes.append({
+            "token": scene_token,
+            "log_token": "",  # Assign log token later if needed
+            "name": scene_folder,
+            "description": f"Scene data for {scene_folder}",
+            "nbr_samples": len(scene_samples),
+            "first_sample_token": scene_samples[0]["token"] if scene_samples else "",
+            "last_sample_token": scene_samples[-1]["token"] if scene_samples else "",
+        })
 
         # After generating samples and calibrated sensors, generate sample_data
         self._generate_sample_data_entries(scene_folder, scene_token)
@@ -692,6 +918,43 @@ class NuScenesConverter:
             }
             self.categories.append(category_entry)
 
+    def _update_instance_entries(self):
+        """Update instance entries with annotation counts and first/last annotation tokens."""
+        print("\nUpdating instance entries with annotation information...")
+        
+        # Create a mapping of sample tokens to timestamps
+        sample_token_to_timestamp = {sample["token"]: sample["timestamp"] for sample in self.samples}
+        
+        # Group annotations by instance token
+        instance_annotations = {}
+        for annotation in self.sample_annotations:
+            instance_token = annotation["instance_token"]
+            if instance_token not in instance_annotations:
+                instance_annotations[instance_token] = []
+            instance_annotations[instance_token].append(annotation)
+        
+        # Update each instance entry
+        for instance in self.instances:
+            instance_token = instance["token"]
+            annotations = instance_annotations.get(instance_token, [])
+            
+            if annotations:
+                # Sort annotations by timestamp using the sample token mapping
+                annotations.sort(key=lambda x: sample_token_to_timestamp.get(x["sample_token"], 0))
+                
+                # Update instance entry
+                instance["nbr_annotations"] = len(annotations)
+                instance["first_annotation_token"] = annotations[0]["token"]
+                instance["last_annotation_token"] = annotations[-1]["token"]
+            else:
+                # No annotations found for this instance
+                instance["nbr_annotations"] = 0
+                instance["first_annotation_token"] = ""
+                instance["last_annotation_token"] = ""
+        
+        print(f"Updated {len(self.instances)} instance entries")
+        print(f"Instances with annotations: {sum(1 for i in self.instances if i['nbr_annotations'] > 0)}")
+
     def convert_all(self):
         """Convert all scenes specified in the config."""
         self._generate_sensor_entries()
@@ -702,6 +965,8 @@ class NuScenesConverter:
             print(f"Processing scene: {scene_folder}")
             self.convert_scene(scene_folder)
         self._assign_log_token_to_scenes()
+        # Update instance entries after all scenes are processed
+        self._update_instance_entries()
         self._write_all_tables()
 
     def _write_metadata(self):
