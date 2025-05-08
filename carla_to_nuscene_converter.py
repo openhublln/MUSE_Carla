@@ -488,6 +488,70 @@ class NuScenesConverter:
         for scene in self.scenes:
             scene["log_token"] = getattr(self, "log_token", "")
 
+    def _generate_instance_entries(self, scene_folder: str, scene_token: str):
+        """Generate instance.json entries for a scene based on 3dbbox annotations.
+        
+        Args:
+            scene_folder: Name of the scene folder
+            scene_token: Token of the scene
+        """
+        # Get category token mapping
+        category_mappings = self.config.get("category_mappings", {})
+        category_name_to_token = {entry["name"]: entry["token"] for entry in self.categories}
+        
+        # Track unique actor IDs in this scene
+        unique_actors = set()
+        
+        # Find all 3dbbox JSON files in the scene
+        scene_path = self.input_base / scene_folder
+        for sensor_folder in scene_path.iterdir():
+            if not sensor_folder.is_dir():
+                continue
+                
+            # Look for 3dbbox JSON files
+            bbox_files = list(sensor_folder.glob("*_3dbbox.json"))
+            for bbox_file in bbox_files:
+                try:
+                    with open(bbox_file, 'r') as f:
+                        bbox_data = json.load(f)
+                        
+                    # Extract unique actor IDs and their types
+                    for annotation in bbox_data:
+                        actor_id = annotation.get("actor_id")
+                        actor_type = annotation.get("type")
+                        
+                        if actor_id is not None and actor_type is not None:
+                            unique_actors.add((actor_id, actor_type))
+                            
+                except Exception as e:
+                    print(f"Error reading bbox file {bbox_file}: {e}")
+                    continue
+        
+        # Generate instance entries for each unique actor
+        for actor_id, actor_type in unique_actors:
+            # Get NuScenes category name from mapping
+            nuscene_category = category_mappings.get(actor_type)
+            if not nuscene_category:
+                print(f"Warning: No category mapping found for CARLA type {actor_type}")
+                continue
+                
+            # Get category token
+            category_token = category_name_to_token.get(nuscene_category)
+            if not category_token:
+                print(f"Warning: No category token found for NuScenes category {nuscene_category}")
+                continue
+            
+            # Generate instance entry
+            instance_entry = {
+                "token": self._generate_token(),
+                "category_token": category_token,
+                "nbr_annotations": None,  # TODO: Will be populated later
+                "first_annotation_token": None,  # TODO: Will be populated later
+                "last_annotation_token": None  # TODO: Will be populated later
+            }
+            
+            self.instances.append(instance_entry)
+
     def convert_scene(self, scene_folder: str):
         """Convert a single scene folder to NuScenes format.
 
@@ -505,6 +569,13 @@ class NuScenesConverter:
         if not organized_data:
              print(f"Warning: Could not organize data by timestamp in {scene_folder}. Skipping.")
              return
+
+        # Generate scene token
+        scene_token = self._generate_token()
+        self.token_maps['scene'][scene_folder] = scene_token
+
+        # Generate instance entries for this scene
+        self._generate_instance_entries(scene_folder, scene_token)
 
         # --- EGO POSE EXTRACTION ---
         ego_pose_dir = self.input_base / scene_folder / "ego_pose"
@@ -603,11 +674,30 @@ class NuScenesConverter:
         # After generating samples and calibrated sensors, generate sample_data
         self._generate_sample_data_entries(scene_folder, scene_token)
 
+    def _generate_category_entries(self):
+        """Generate category.json entries based on category mappings in config."""
+        category_mappings = self.config.get("category_mappings", {})
+        self.categories = []
+        
+        for carla_type, nuscene_name in category_mappings.items():
+            token = self._generate_token()
+            description = "A car" if nuscene_name == "vehicle.car" else ""
+            # TODO: Add more descriptions for other categories
+            
+            category_entry = {
+                "token": token,
+                "name": nuscene_name,
+                "description": description,
+                "index": None  # TODO later
+            }
+            self.categories.append(category_entry)
+
     def convert_all(self):
         """Convert all scenes specified in the config."""
         self._generate_sensor_entries()
         self._generate_calibrated_sensors()
         self._generate_log_entry()
+        self._generate_category_entries()
         for scene_folder in self.scene_folders:
             print(f"Processing scene: {scene_folder}")
             self.convert_scene(scene_folder)
