@@ -2,6 +2,7 @@ import os
 import json
 import numpy as np
 import carla 
+from shapely.geometry import Polygon, box
 
 # --- Liang-Barsky Line Clipping Algorithm ---
 def liang_barsky_clip(x1, y1, x2, y2, x_min, y_min, x_max, y_max):
@@ -61,6 +62,106 @@ def get_image_point(loc, K, w2c):
     point_img[0] /= point_img[2]
     point_img[1] /= point_img[2]
     return point_img[0:2], is_behind
+
+def compute_visibility(clipped_segments, bbox_from_clipped, image_width, image_height):
+    """
+    Compute the visibility percentage of a bounding box.
+    
+    Args:
+        clipped_segments: List of clipped line segments [[[x1,y1], [x2,y2]], ...]
+        bbox_from_clipped: [x_min, y_min, width, height] of the bounding box
+        image_width: Width of the image
+        image_height: Height of the image
+    
+    Returns:
+        float: Visibility percentage (0-100)
+    """
+    if not clipped_segments or not bbox_from_clipped:
+        print("No clipped segments or bbox provided")
+        return 0.0
+        
+    # Get bounding box parameters
+    x_min, y_min, width, height = bbox_from_clipped
+    
+    # Debug print
+    print(f"\nDebug - Bounding Box:")
+    print(f"Position: ({x_min}, {y_min})")
+    print(f"Size: {width}x{height}")
+    print(f"Number of segments: {len(clipped_segments)}")
+    
+    # Check if box is partially outside image
+    is_partially_outside = (
+        x_min < 0 or y_min < 0 or 
+        x_min + width > image_width or 
+        y_min + height > image_height
+    )
+    
+    try:
+        # Create a polygon from the clipped segments to get the actual visible area
+        points = []
+        for segment in clipped_segments:
+            points.extend(segment)
+        
+        if len(points) < 3:
+            print("Not enough points to form polygon")
+            return 0.0
+        
+        # Convert points to numpy array
+        points_array = np.array(points)
+        
+        # Find the point with the lowest y-coordinate (and leftmost if tied)
+        start_idx = np.lexsort((points_array[:, 0], points_array[:, 1]))[0]
+        start_point = points_array[start_idx]
+        
+        # Sort remaining points by angle with start point
+        remaining_points = np.delete(points_array, start_idx, axis=0)
+        angles = np.arctan2(remaining_points[:, 1] - start_point[1],
+                          remaining_points[:, 0] - start_point[0])
+        sorted_indices = np.argsort(angles)
+        sorted_points = remaining_points[sorted_indices]
+        
+        # Combine start point with sorted points
+        ordered_points = np.vstack((start_point, sorted_points))
+        
+        # Create polygon from ordered points
+        visible_polygon = Polygon(ordered_points)
+        
+        if not visible_polygon.is_valid:
+            print("Invalid polygon created from ordered points")
+            return 0.0
+        
+        # Calculate visible area
+        visible_area = visible_polygon.area
+        
+        # Calculate total area based on whether the box is truncated
+        if is_partially_outside:
+            # For truncated boxes, calculate the maximum possible visible area
+            # by intersecting the box with image boundaries
+            bbox_polygon = box(x_min, y_min, x_min + width, y_min + height)
+            image_polygon = box(0, 0, image_width, image_height)
+            max_visible_polygon = bbox_polygon.intersection(image_polygon)
+            total_area = max_visible_polygon.area
+        else:
+            # For non-truncated boxes, use the actual box area
+            total_area = width * height
+        
+        # Debug print
+        print(f"\nDebug - Visibility Calculation:")
+        print(f"Visible area: {visible_area}")
+        print(f"Total area: {total_area}")
+        
+        # Calculate visibility percentage
+        visibility = (visible_area / total_area) * 100
+        
+        # Clamp to 0-100 range
+        visibility = max(0.0, min(100.0, visibility))
+        
+        print(f"Final visibility: {visibility}%")
+        return visibility
+        
+    except Exception as e:
+        print(f"Error in visibility calculation: {e}")
+        return 0.0
 
 def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
     """
@@ -178,7 +279,8 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
                 "magnitude": velocity_magnitude
             },
             "pose": actor_pose,
-            "size": size  # Add bounding box dimensions
+            "size": size,  # Add bounding box dimensions
+            "visibility": compute_visibility(clipped_segments_for_actor, bbox_from_clipped, image_w, image_h)
         })
 
     # --- Save to JSON ---

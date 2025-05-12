@@ -77,6 +77,7 @@ class NuScenesConverter:
             'instance': {},  # (scene_token, actor_id) -> token
             'sample': {},  # timestamp -> token
             'scene': {},  # scene_name -> token
+            'visibility': {},  # (scene_folder, actor_id) -> token
         }
     
     def _generate_token(self) -> str:
@@ -645,6 +646,8 @@ class NuScenesConverter:
             scene_folder: Name of the scene folder
             scene_token: Token of the scene
         """
+        print(f"\nGenerating instance entries for scene {scene_folder}")
+        
         # Get category token mapping
         category_mappings = self.config.get("category_mappings", {})
         category_name_to_token = {entry["name"]: entry["token"] for entry in self.categories}
@@ -701,14 +704,22 @@ class NuScenesConverter:
             instance_entry = {
                 "token": instance_token,
                 "category_token": category_token,
-                "nbr_annotations": None,  # TODO: Will be populated later
-                "first_annotation_token": None,  # TODO: Will be populated later
-                "last_annotation_token": None  # TODO: Will be populated later
+                "nbr_annotations": None,  # Will be populated later
+                "first_annotation_token": None,  # Will be populated later
+                "last_annotation_token": None  # Will be populated later
             }
             
             # Store the instance token in the mapping
-            self.token_maps['instance'][(scene_token, actor_id)] = instance_token
+            self.token_maps['instance'][(scene_folder, actor_id)] = instance_token
             self.instances.append(instance_entry)
+            
+            print(f"Created instance entry for actor {actor_id} ({actor_type}) with token {instance_token}")
+        
+        # Print instance token mappings for debugging
+        print("\nInstance token mappings:")
+        for (scene, actor_id), token in self.token_maps['instance'].items():
+            if scene == scene_folder:
+                print(f"Actor ID: {actor_id} -> Token: {token}")
 
     def _generate_attribute_entries(self):
         """Generate attribute.json entries based on config."""
@@ -1031,7 +1042,7 @@ class NuScenesConverter:
         for sensor_folder in scene_path.iterdir():
             if not sensor_folder.is_dir():
                 continue
-                
+            
             print(f"\nProcessing sensor folder: {sensor_folder.name}")
             
             # Look for 3dbbox JSON files
@@ -1067,7 +1078,7 @@ class NuScenesConverter:
                             continue
                             
                         # Get instance token from mapping
-                        instance_token = self.token_maps['instance'].get((scene_token, actor_id))
+                        instance_token = self.token_maps['instance'].get((scene_folder, actor_id))
                         if not instance_token:
                             print(f"Warning: No instance token found for actor {actor_id}")
                             continue
@@ -1147,7 +1158,7 @@ class NuScenesConverter:
                             "sample_token": sample_token,
                             "instance_token": instance_token,
                             "attribute_tokens": [attribute_token] if attribute_token else [],
-                            "visibility_token": "",  # TODO: Will be populated later
+                            "visibility_token": "",  # Will be populated later
                             "translation": box_center,
                             "size": box_size,
                             "rotation": quaternion,
@@ -1164,6 +1175,7 @@ class NuScenesConverter:
                         
                         self.sample_annotations.append(annotation_entry)
                         annotations_processed += 1
+                        print(f"Created annotation for actor {actor_id} at timestamp {timestamp}")
                         
                 except Exception as e:
                     print(f"Error processing bbox file {bbox_file}: {e}")
@@ -1197,6 +1209,219 @@ class NuScenesConverter:
             print("Warning: No sample annotations were generated!")
         else:
             print(f"Successfully generated {len(self.sample_annotations)} sample annotations")
+
+    def _generate_visibility_entries(self):
+        """Generate the fixed set of visibility entries for the dataset."""
+        print("\nGenerating visibility entries...")
+        
+        # Define the fixed visibility levels
+        visibility_levels = [
+            ("v0", "0-40%"),
+            ("v1", "40-60%"),
+            ("v2", "60-80%"),
+            ("v3", "80-100%")
+        ]
+        
+        # Generate entries for each level
+        for level, description in visibility_levels:
+            token = self._generate_token()
+            visibility_entry = {
+                "token": token,
+                "level": level,
+                "description": description
+            }
+            self.visibilities.append(visibility_entry)
+            
+            # Store token for later use
+            self.token_maps['visibility'][level] = token
+        
+        print(f"Generated {len(self.visibilities)} visibility entries")
+
+    def _count_total_cameras(self, scene_folder: str) -> int:
+        """Count the total number of cameras in a scene.
+        
+        Args:
+            scene_folder: Name of the scene folder
+            
+        Returns:
+            int: Total number of cameras in the scene
+        """
+        scene_path = self.input_base / scene_folder
+        camera_count = 0
+        
+        # Look for camera folders
+        for sensor_folder in scene_path.iterdir():
+            if not sensor_folder.is_dir():
+                continue
+            
+            # Only count regular camera folders, not instance cameras
+            if sensor_folder.name.startswith("Camera_"):
+                camera_count += 1
+            
+        return camera_count
+
+    def _compute_average_visibility(self, scene_folder: str, timestamp: int, actor_id: int) -> float:
+        """Compute average visibility across all cameras for a given actor at a timestamp.
+        
+        Args:
+            scene_folder: Name of the scene folder
+            timestamp: Timestamp to compute visibility for
+            actor_id: ID of the actor to compute visibility for
+            
+        Returns:
+            float: Average visibility percentage (0-100)
+        """
+        scene_path = self.input_base / scene_folder
+        total_visibility = 0.0
+        
+        # Get total number of cameras in the scene
+        total_cameras = self._count_total_cameras(scene_folder)
+        if total_cameras == 0:
+            print(f"Warning: No cameras found in scene {scene_folder}")
+            return 0.0
+        
+        print(f"\nComputing visibility for actor {actor_id} at timestamp {timestamp}")
+        print(f"Total cameras in scene: {total_cameras}")
+        
+        # Look for 3dbbox files in regular camera folders only
+        for sensor_folder in scene_path.iterdir():
+            if not sensor_folder.is_dir():
+                continue
+            
+            # Skip instance camera folders
+            if not sensor_folder.name.startswith("Camera_"):
+                continue
+            
+            bbox_file = sensor_folder / f"{timestamp}_3dbbox.json"
+            if not bbox_file.exists():
+                continue
+            
+            try:
+                with open(bbox_file, 'r') as f:
+                    bbox_data = json.load(f)
+                    
+                # Find annotation for this actor
+                visibility = 0.0  # Default visibility if actor not found
+                for annotation in bbox_data:
+                    if annotation.get("actor_id") == actor_id and "visibility" in annotation:
+                        visibility = annotation["visibility"]
+                        break
+                    
+                total_visibility += visibility
+                print(f"Found visibility {visibility:.2f}% in {sensor_folder.name}")
+                
+            except Exception as e:
+                print(f"Warning: Error reading bbox file {bbox_file}: {e}")
+                continue
+        
+        # Calculate average visibility across all cameras
+        avg_visibility = total_visibility / total_cameras
+        print(f"Average visibility across {total_cameras} cameras: {avg_visibility:.2f}%")
+        return avg_visibility
+
+    def _get_visibility_level(self, visibility: float) -> str:
+        """Convert visibility percentage to NuScenes visibility level.
+        
+        Args:
+            visibility: Visibility percentage (0-100)
+            
+        Returns:
+            str: Visibility level (v0-v3)
+        """
+        if visibility < 40:
+            return "v0"
+        elif visibility < 60:
+            return "v1"
+        elif visibility < 80:
+            return "v2"
+        else:
+            return "v3"
+
+    def _update_sample_annotations_with_visibility(self, scene_folder: str):
+        """Update sample annotations with visibility tokens based on computed visibility.
+        
+        Args:
+            scene_folder: Name of the scene folder
+        """
+        print(f"\nUpdating sample annotations with visibility for scene {scene_folder}")
+        
+        # Get scene token for this folder
+        scene_token = self.token_maps['scene'].get(scene_folder)
+        if not scene_token:
+            print(f"Warning: No scene token found for folder {scene_folder}")
+            return
+        
+        # Print available visibility tokens
+        print("\nAvailable visibility tokens:")
+        for level, token in self.token_maps['visibility'].items():
+            print(f"Level {level}: {token}")
+        
+        # Print instance token mappings for this scene
+        print("\nInstance token mappings for this scene:")
+        for (scene, actor_id), token in self.token_maps['instance'].items():
+            if scene == scene_folder:
+                print(f"Actor ID: {actor_id} -> Token: {token}")
+        
+        # Get all sample annotations for this scene
+        scene_annotations = []
+        for annotation in self.sample_annotations:
+            # Get the sample
+            sample = next((s for s in self.samples if s["token"] == annotation["sample_token"]), None)
+            if sample is None:
+                continue
+            
+            # Check if this sample belongs to our scene
+            if sample["scene_token"] == scene_token:
+                scene_annotations.append(annotation)
+        
+        print(f"Found {len(scene_annotations)} annotations to update for scene {scene_folder}")
+        
+        for annotation in scene_annotations:
+            # Get instance token
+            instance_token = annotation["instance_token"]
+            
+            # Find the instance entry
+            instance = next((i for i in self.instances if i["token"] == instance_token), None)
+            if instance is None:
+                continue
+            
+            # Get the sample
+            sample = next((s for s in self.samples if s["token"] == annotation["sample_token"]), None)
+            if sample is None:
+                continue
+            
+            # Get actor ID from instance token mapping
+            actor_id = next((aid for (s, aid), tok in self.token_maps['instance'].items() 
+                            if tok == instance_token and s == scene_folder), None)
+            if actor_id is None:
+                print(f"Warning: No actor ID found for instance token {instance_token}")
+                print(f"Available mappings for scene {scene_folder}:")
+                for (s, aid), tok in self.token_maps['instance'].items():
+                    if s == scene_folder:
+                        print(f"Actor ID: {aid} -> Token: {tok}")
+                continue
+            
+            # Compute average visibility for this actor at this timestamp
+            avg_visibility = self._compute_average_visibility(scene_folder, sample["timestamp"], actor_id)
+            print(f"Actor {actor_id} at timestamp {sample['timestamp']} has average visibility: {avg_visibility:.2f}%")
+            
+            # Get visibility level and corresponding token
+            visibility_level = self._get_visibility_level(avg_visibility)
+            visibility_token = self.token_maps['visibility'].get(visibility_level)
+            
+            if visibility_token:
+                annotation["visibility_token"] = visibility_token
+                print(f"Assigned visibility token {visibility_token} (level {visibility_level}) to annotation")
+            else:
+                print(f"Warning: No visibility token found for level {visibility_level}")
+                print(f"Available levels: {list(self.token_maps['visibility'].keys())}")
+        
+        # Verify token assignment
+        assigned_tokens = sum(1 for a in scene_annotations if a["visibility_token"])
+        print(f"\nVisibility token assignment summary:")
+        print(f"Total annotations: {len(scene_annotations)}")
+        print(f"Annotations with visibility tokens: {assigned_tokens}")
+        print(f"Annotations without visibility tokens: {len(scene_annotations) - assigned_tokens}")
 
     def convert_scene(self, scene_folder: str):
         """Convert a single scene folder to NuScenes format.
@@ -1236,6 +1461,9 @@ class NuScenesConverter:
 
         # Generate sample annotations after samples are created
         self._generate_sample_annotations(scene_folder, scene_token)
+        
+        # Update sample annotations with visibility tokens
+        self._update_sample_annotations_with_visibility(scene_folder)
 
         # --- Create the scene record ---
         self.scenes.append({
@@ -1312,12 +1540,14 @@ class NuScenesConverter:
         self._generate_calibrated_sensors()
         self._generate_log_entry()
         self._generate_category_entries()
-        self._generate_attribute_entries()  # Generate attributes before processing scenes
+        self._generate_attribute_entries()
+        self._generate_visibility_entries()  # Generate fixed visibility entries first
+        
         for scene_folder in self.scene_folders:
             print(f"Processing scene: {scene_folder}")
             self.convert_scene(scene_folder)
+        
         self._assign_log_token_to_scenes()
-        # Update instance entries after all scenes are processed
         self._update_instance_entries()
         self._write_all_tables()
 
