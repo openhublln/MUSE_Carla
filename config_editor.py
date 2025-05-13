@@ -43,16 +43,19 @@ class MainWindow(QMainWindow):
         save_btn = QPushButton("Save Configuration")
         run_btn = QPushButton("Run Simulation")
         visualize_btn = QPushButton("Visualize Simulation")
+        convert_nuscene_btn = QPushButton("Convert to NuScenes")
         
         launch_btn.clicked.connect(self.launch_carla)
         save_btn.clicked.connect(self.save_config)
         run_btn.clicked.connect(self.run_simulation)
         visualize_btn.clicked.connect(self.visualize_simulation)
+        convert_nuscene_btn.clicked.connect(self.convert_to_nuscene)
         
         button_layout.addWidget(launch_btn)
         button_layout.addWidget(save_btn)
         button_layout.addWidget(run_btn)
         button_layout.addWidget(visualize_btn)
+        button_layout.addWidget(convert_nuscene_btn)
         
         # Add widgets to layout
         left_panel = QWidget()
@@ -293,6 +296,67 @@ class MainWindow(QMainWindow):
                 "Error",
                 f"Failed to launch CARLA: {str(e)}\n\n" +
                 "Please make sure CARLA is correctly installed."
+            )
+
+    def convert_to_nuscene(self):
+        """Run the CARLA to NuScenes conversion script."""
+        try:
+            converter_config_file_name = "converter_config.yml"
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            converter_config_path = os.path.join(current_dir, converter_config_file_name)
+
+            if not os.path.exists(converter_config_path):
+                QMessageBox.warning(
+                    self,
+                    "Converter Configuration Missing",
+                    f"{converter_config_file_name} not found in the script directory.\\n"
+                    "Please ensure the converter configuration file is present."
+                )
+                return
+
+            python_exe = sys.executable
+            
+            # Show starting message
+            QMessageBox.information(
+                self,
+                "Conversion Starting",
+                "Starting conversion to NuScenes format ...\n"
+                "This process may take some time. Please wait.\n"
+                "A notification will appear upon completion."
+            )
+            
+            process = subprocess.Popen(
+                [python_exe, "carla_to_nuscene_converter.py", converter_config_path],
+                cwd=current_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            # Wait for the process to complete and get output
+            stdout, stderr = process.communicate()
+            
+            if process.returncode == 0:
+                QMessageBox.information(
+                    self,
+                    "Conversion Complete",
+                    "Data conversion to NuScenes format completed successfully!"
+                )
+            else:
+                QMessageBox.critical(
+                    self,
+                    "Conversion Failed",
+                    f"Data conversion to NuScenes format failed.\n\n"
+                    f"Error:\n{stderr}"
+                )
+                
+        except Exception as e:
+            QMessageBox.critical(
+                self, 
+                "Error", 
+                f"Failed to start or complete NuScenes conversion: {str(e)}"
             )
 
 def main():
