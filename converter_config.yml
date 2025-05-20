@@ -10,11 +10,11 @@ input:
 output:
   base_dir: 'nuscenes_format'  # Output directory for NuScenes format data
   maintain_folder_structure: true  # Keep original scene folder structure
-  keyframe_rate: 20.0  # Updated target keyframe rate to 10 Hz
+  keyframe_rate: 20.0  
 
 # Keyframe settings
 keyframe:
-  rate: 2  # Hz (NuScenes standard is 2Hz)
+  rate: 20  # Hz (NuScenes standard is 2Hz)
   min_points_per_object: 1  # Minimum number of lidar points for valid annotation
 
 # Coordinate system

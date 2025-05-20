@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
-from nuscene_utils import generate_token, euler_to_quaternion # euler_to_quaternion might be needed for ego_pose processing if not already handled
+from nuscene_utils import generate_token, euler_to_quaternion, adjust_z_for_ego_pose
+from PIL import Image
+import shutil
 
 class SampleDataGenerator:
     def __init__(self, converter):
@@ -8,8 +10,8 @@ class SampleDataGenerator:
 
     def generate_sample_data_entries(self, scene_folder: str, scene_token: str):
         scene_path = self.converter.input_base / scene_folder
-        sensor_json_path = self.converter.output_base / 'sensor.json'
-        calibrated_json_path = self.converter.output_base / 'calibrated_sensor.json'
+        sensor_json_path = self.converter.output_base / self.converter.version / 'sensor.json'
+        calibrated_json_path = self.converter.output_base / self.converter.version / 'calibrated_sensor.json'
         
         try:
             with open(sensor_json_path, 'r') as f:
@@ -38,7 +40,7 @@ class SampleDataGenerator:
         all_sensor_timestamps = set()
         for sensor in simulation_sensors:
             sensor_name = sensor["name"]
-            sensor_data_folder = scene_path / sensor_name # Corrected variable name
+            sensor_data_folder = scene_path / sensor_name
             if not sensor_data_folder.exists() or not sensor_data_folder.is_dir():
                 continue
 
@@ -51,10 +53,10 @@ class SampleDataGenerator:
                 ext = ".json"
             else:
                 continue
-            files = [f for f in sensor_data_folder.glob(f"*{ext}") if f.is_file()] # Corrected variable name
+            files = [f for f in sensor_data_folder.glob(f"*{ext}") if f.is_file()]
             for file in files:
                 try:
-                    timestamp = int(file.stem) # Assumes filename is just the timestamp for sensor data
+                    timestamp = int(file.stem)
                     all_sensor_timestamps.add(timestamp)
                 except ValueError:
                     # Attempt to parse if filename is <timestamp>_suffix.ext
@@ -62,40 +64,48 @@ class SampleDataGenerator:
                         timestamp = int(file.stem.split('_')[0])
                         all_sensor_timestamps.add(timestamp)
                     except (ValueError, IndexError):
-                        # print(f"Warning: Could not parse timestamp from sensor data file {file}")
-                        continue 
+                        continue
 
         ego_pose_dir = scene_path / self.converter.EGO_POSE_FOLDER
         ego_pose_timestamps = {}
-        if ego_pose_dir.exists() and ego_pose_dir.is_dir():
+        if ego_pose_dir.exists():
             for pose_file in ego_pose_dir.glob("*.json"):
                 try:
-                    with open(pose_file, "r") as f:
+                    timestamp = int(pose_file.stem)
+                    with open(pose_file, 'r') as f:
                         pose_data = json.load(f)
-                    timestamp = pose_data["timestamp"]
-                    
+                        
                     translation = [
                         float(pose_data["translation"]["x"]),
                         float(pose_data["translation"]["y"]),
-                        0.0  # Force Z=0 for ego pose
+                        float(pose_data["translation"]["z"])
                     ]
-                    roll = float(pose_data["rotation"]["roll"])
-                    pitch = float(pose_data["rotation"]["pitch"])
-                    yaw = float(pose_data["rotation"]["yaw"])
-                    quaternion = euler_to_quaternion(roll, pitch, yaw) # Using utility
+                    
+                    # Convert CARLA Euler angles to NuScenes quaternion
+                    rotation = euler_to_quaternion(
+                        float(pose_data["rotation"]["roll"]),
+                        float(pose_data["rotation"]["pitch"]),
+                        float(pose_data["rotation"]["yaw"])
+                    )
+                    
+                    # Adjust Z coordinate to match NuScenes' Z=0 assumption
+                    translation = adjust_z_for_ego_pose(translation)
+                    
                     token = generate_token()
                     ego_pose_entry = {
                         "token": token,
+                        "timestamp": timestamp,
                         "translation": translation,
-                        "rotation": quaternion,
-                        "timestamp": timestamp
+                        "rotation": rotation
                     }
+                    
                     self.converter.ego_poses.append(ego_pose_entry)
                     ego_pose_timestamps[timestamp] = token
+                    
                 except Exception as e:
-                    # print(f"Warning: Error processing ego pose file {pose_file}: {e}")
+                    print(f"Warning: Error processing ego pose file {pose_file}: {e}")
                     continue
-        
+
         for sensor in simulation_sensors:
             sensor_name = sensor["name"]
             sensor_type = sensor["type"]
@@ -103,9 +113,9 @@ class SampleDataGenerator:
             if not channel:
                 continue
             
-            sensor_token_val = channel_to_sensor_token.get(channel, "") # Renamed to avoid conflict
+            sensor_token_val = channel_to_sensor_token.get(channel, "")
             calibrated_sensor_token = sensor_token_to_calibrated_token.get(sensor_token_val, "")
-            current_sensor_folder = scene_path / sensor_name # Corrected variable name
+            current_sensor_folder = scene_path / sensor_name
 
             if not current_sensor_folder.exists() or not current_sensor_folder.is_dir():
                 continue
@@ -113,7 +123,7 @@ class SampleDataGenerator:
             fileformat, width, height, ext = "", None, None, ""
             if sensor_type == "camera":
                 ext = ".png"
-                fileformat = "png"
+                fileformat = "jpg"  # Changed from png to jpg for nuScenes compatibility
                 width = int(float(sensor.get("attributes", {}).get("image_size_x", 0)))
                 height = int(float(sensor.get("attributes", {}).get("image_size_y", 0)))
             elif sensor_type in ("lidar", "semantic_lidar", "radar"):
@@ -129,28 +139,46 @@ class SampleDataGenerator:
             if not files:
                 continue
             
+            # Create target directory for this sensor
+            target_dir = self.converter.output_base / f"samples/{channel}"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            
             entries = []
             for file in files:
                 try:
                     timestamp = 0
                     try:
-                        timestamp = int(file.stem) # Assumes filename is just the timestamp
+                        timestamp = int(file.stem)
                     except ValueError:
-                         # Attempt to parse if filename is <timestamp>_suffix.ext
                         try:
                             timestamp = int(file.stem.split('_')[0])
                         except (ValueError, IndexError):
-                            # print(f"Warning: Could not parse timestamp from data file {file} for sensor {sensor_name}")
                             continue
                     
                     closest_keyframe_ts = min(keyframe_timestamps, key=lambda x: abs(x - timestamp), default=None)
                     if closest_keyframe_ts is None:
-                        # print(f"Warning: No keyframes found for timestamp {timestamp} of file {file}")
                         continue
                     sample_token = sample_timestamps[closest_keyframe_ts]
                     
                     is_key_frame = timestamp in keyframe_timestamps
                     ego_pose_token = ego_pose_timestamps.get(timestamp, "")
+                    
+                    # Create the correct filename for nuScenes format
+                    if sensor_type == "camera":
+                        filename = f"samples/{channel}/{timestamp}.jpg"
+                    else:
+                        filename = f"samples/{channel}/{timestamp}{ext}"
+                    
+                    # Copy the file to the target directory
+                    target_file = target_dir / filename.split('/')[-1]  # Use just the filename for the target path
+                    if sensor_type == "camera":
+                        # Convert PNG to JPG for camera images
+                        img = Image.open(file)
+                        img.convert('RGB').save(target_file, 'JPEG')
+                        print(f"Converted and copied {file.name} to {target_file.name}")
+                    else:
+                        shutil.copy2(file, target_file)
+                        print(f"Copied {file.name} to {target_file.name}")
                     
                     token = generate_token()
                     entry = {
@@ -158,7 +186,7 @@ class SampleDataGenerator:
                         "sample_token": sample_token,
                         "ego_pose_token": ego_pose_token,
                         "calibrated_sensor_token": calibrated_sensor_token,
-                        "filename": str(file.relative_to(self.converter.input_base)),
+                        "filename": filename,
                         "fileformat": fileformat,
                         "width": width,
                         "height": height,
@@ -169,7 +197,7 @@ class SampleDataGenerator:
                     }
                     entries.append(entry)
                 except Exception as e:
-                    # print(f"Warning: Error processing file {file} for sensor {sensor_name}: {e}")
+                    print(f"Warning: Error processing file {file} for sensor {sensor_name}: {e}")
                     continue
             
             for i, entry in enumerate(entries):

@@ -10,6 +10,7 @@ __pycache__/
 venv/
 env/
 carlavenv/
+.venv_nuscenes_py311/
 
 # IDE files
 .vscode/
@@ -23,5 +24,6 @@ Thumbs.db
 todo.md
 .cursor
 nuscenes_format
-tests
+
+
 

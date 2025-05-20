@@ -11,6 +11,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 import carla
 import math
+import shutil
+from PIL import Image
 
 # Import utilities from the new module
 from nuscene_utils import (
@@ -40,11 +42,30 @@ class NuScenesConverter:
     
     EGO_POSE_FOLDER = "ego_pose" # Class constant
 
-    def _detect_scene_folders(self):
-        """Automatically detect scene folders based on the simulation configuration."""
-        scene_base_path = self.input_base
-        detected_scenes = [folder.name for folder in scene_base_path.iterdir() if folder.is_dir()]
-        return detected_scenes
+    def _detect_scene_folders(self) -> List[str]:
+        """Detect scene folders in the input directory.
+        
+        Returns:
+            List of scene folder names
+        """
+        print(f"Searching for scene folders in: {self.input_base.absolute()}")
+        
+        # Look for folders that match the scene pattern
+        scene_folders = []
+        for item in self.input_base.iterdir():
+            if item.is_dir() and item.name.startswith('scene_'):
+                print(f"Found scene folder: {item.name}")
+                scene_folders.append(item.name)
+                
+        if not scene_folders:
+            print("WARNING: No scene folders found!")
+            print(f"Contents of {self.input_base.absolute()}:")
+            for item in self.input_base.iterdir():
+                print(f"  - {item.name} ({'directory' if item.is_dir() else 'file'})")
+        else:
+            print(f"Found {len(scene_folders)} scene folders")
+            
+        return sorted(scene_folders)
 
     def __init__(self, config_path: str):
         """Initialize the converter with the given config file.
@@ -54,9 +75,21 @@ class NuScenesConverter:
         """
         self.config = self._load_config(config_path)
         self.version = self.config['version']
-        self.input_base = Path(self.config['input']['base_dir'])
-        self.output_base = Path(self.config['output']['base_dir'])
+        
+        # Set input base to the _out directory
+        self.input_base = Path('_out')
+        if not self.input_base.exists():
+            raise FileNotFoundError(f"Input directory '_out' not found at {self.input_base.absolute()}")
+            
+        # Set output base to nuscenes_format
+        self.output_base = Path('nuscenes_format')
+        self.output_base.mkdir(parents=True, exist_ok=True)
+        
+        print(f"Input base directory: {self.input_base.absolute()}")
+        print(f"Output base directory: {self.output_base.absolute()}")
+        
         self.scene_folders = self._detect_scene_folders()  # Automatically detect scenes
+        print(f"Detected scene folders: {self.scene_folders}")
 
         # Ensure output directory exists
         self.output_base.mkdir(parents=True, exist_ok=True)
@@ -298,9 +331,151 @@ class NuScenesConverter:
         sc_generators.generate_calibrated_sensors()
 
     def _generate_sample_data_entries(self, scene_folder: str, scene_token: str):
+        """Generate sample data entries and move sensor data to correct locations."""
         if not hasattr(self, 'sample_data_gen_instance') or self.sample_data_gen_instance is None:
             self.sample_data_gen_instance = SampleDataGenerator(self)
+        
+        # Create sensor-specific directories matching official nuScenes structure
+        sensor_dirs = {
+            'Camera_Front': 'samples/CAM_FRONT',
+            'Camera_Back': 'samples/CAM_BACK',
+            'Camera_FrontRight': 'samples/CAM_FRONTRIGHT',
+            'Camera_FrontLeft': 'samples/CAM_FRONTLEFT',
+            'Camera_BackRight': 'samples/CAM_BACKRIGHT',
+            'Camera_BackLeft': 'samples/CAM_BACKLEFT',
+            'Lidar': 'samples/LIDAR_TOP',
+            'Radar_Front': 'samples/RADAR_FRONT',
+            'Radar_Back': 'samples/RADAR_BACK',
+            'Radar_FrontRight': 'samples/RADAR_FRONTRIGHT',
+            'Radar_FrontLeft': 'samples/RADAR_FRONTLEFT',
+            'Radar_BackRight': 'samples/RADAR_BACKRIGHT',
+            'Radar_BackLeft': 'samples/RADAR_BACKLEFT',
+            'Semantic_Lidar': 'samples/SEMANTIC_LIDAR',
+            'GNSS': 'samples/GNSS',
+            'IMU': 'samples/IMU'
+        }
+        
+        # Create all required directories
+        for sensor_dir in sensor_dirs.values():
+            (self.output_base / sensor_dir).mkdir(parents=True, exist_ok=True)
+            # Also create corresponding sweep directories
+            sweep_dir = sensor_dir.replace('samples/', 'sweeps/')
+            (self.output_base / sweep_dir).mkdir(parents=True, exist_ok=True)
+        
+        # Generate sample data entries
         self.sample_data_gen_instance.generate_sample_data_entries(scene_folder, scene_token)
+        
+        # Copy sensor data files to correct locations
+        scene_path = self.input_base / scene_folder
+        print(f"\nProcessing scene: {scene_folder}")
+        print(f"Input base path: {self.input_base.absolute()}")
+        print(f"Scene path: {scene_path.absolute()}")
+        print(f"Output base path: {self.output_base.absolute()}")
+        
+        if not scene_path.exists():
+            print(f"ERROR: Scene path does not exist: {scene_path.absolute()}")
+            return
+        
+        files_processed = 0
+        files_copied = 0
+        
+        for sensor_name, target_dir in sensor_dirs.items():
+            sensor_path = scene_path / sensor_name
+            if sensor_path.exists():
+                target_path = self.output_base / target_dir
+                print(f"\nProcessing sensor: {sensor_name}")
+                print(f"Source directory: {sensor_path.absolute()}")
+                print(f"Target directory: {target_path.absolute()}")
+                
+                # Get all files for this sensor
+                files = []
+                
+                # For cameras, we need to handle PNG files and their associated JSON files
+                if sensor_name.startswith('Camera'):
+                    # Get all PNG files (these are the main image files)
+                    png_files = list(sensor_path.glob('*.png'))
+                    print(f"Found {len(png_files)} PNG files")
+                    files.extend(png_files)
+                    
+                    # Get all bbox JSON files
+                    bbox_files = list(sensor_path.glob('*_bbox.json'))
+                    print(f"Found {len(bbox_files)} bbox files")
+                    files.extend(bbox_files)
+                    
+                    # Get all 3dbbox JSON files
+                    bbox3d_files = list(sensor_path.glob('*_3dbbox.json'))
+                    print(f"Found {len(bbox3d_files)} 3dbbox files")
+                    files.extend(bbox3d_files)
+                
+                # For lidar and radar, we need to handle NPY files
+                elif sensor_name in ['Lidar', 'Semantic_Lidar'] or sensor_name.startswith('Radar'):
+                    npy_files = list(sensor_path.glob('*.npy'))
+                    print(f"Found {len(npy_files)} NPY files")
+                    files.extend(npy_files)
+                
+                # For GNSS and IMU, we need to handle JSON files
+                elif sensor_name in ['GNSS', 'IMU']:
+                    json_files = list(sensor_path.glob('*.json'))
+                    print(f"Found {len(json_files)} JSON files")
+                    files.extend(json_files)
+                
+                print(f"Total files found for {sensor_name}: {len(files)}")
+                
+                for file in files:
+                    files_processed += 1
+                    try:
+                        # Extract timestamp from filename
+                        timestamp = file.stem.split('_')[0]
+                        
+                        # Skip files that don't have a valid timestamp
+                        try:
+                            int(timestamp)
+                        except ValueError:
+                            print(f"Skipping file with invalid timestamp: {file.name}")
+                            continue
+                        
+                        # Create nuScenes-style filename based on file type
+                        if file.suffix == '.png':
+                            new_filename = f"{timestamp}.jpg"  # Convert PNG to JPG for cameras
+                        elif file.suffix == '.npy':
+                            new_filename = f"{timestamp}.npy"
+                        elif file.suffix == '.json':
+                            # Skip bbox files as they're not part of the nuScenes format
+                            if '_bbox.json' in file.name or '_3dbbox.json' in file.name:
+                                continue
+                            new_filename = f"{timestamp}.json"
+                        else:
+                            continue
+                            
+                        target_file = target_path / new_filename
+                        
+                        # Ensure the target directory exists
+                        target_file.parent.mkdir(parents=True, exist_ok=True)
+                        
+                        # Copy the file
+                        if file.suffix == '.png':
+                            # Convert PNG to JPG for camera images
+                            img = Image.open(file)
+                            img.convert('RGB').save(target_file, 'JPEG')
+                            print(f"Converted and copied {file.name} to {target_file.name}")
+                        else:
+                            shutil.copy2(file, target_file)
+                            print(f"Copied {file.name} to {target_file.name}")
+                            
+                        files_copied += 1
+                        
+                    except Exception as e:
+                        print(f"Error processing {file.name}: {e}")
+                        print(f"Source file exists: {file.exists()}")
+                        print(f"Target directory exists: {target_file.parent.exists()}")
+                        print(f"Target directory is writable: {os.access(target_file.parent, os.W_OK)}")
+                        continue
+            else:
+                print(f"Sensor directory not found: {sensor_path.absolute()}")
+        
+        print(f"\nSummary for scene {scene_folder}:")
+        print(f"Total files processed: {files_processed}")
+        print(f"Total files successfully copied: {files_copied}")
 
     def _generate_sample_annotations(self, scene_folder: str, scene_token: str):
         if not hasattr(self, 'annotation_gen_instance') or self.annotation_gen_instance is None:
@@ -454,32 +629,6 @@ class NuScenesConverter:
         self.instance_gen_instance.update_instance_entries()
         self._write_all_tables()
 
-    def _write_metadata(self):
-        """Write all metadata files in NuScenes format."""
-        metadata_files = {
-            'attribute': self.attributes,
-            'calibrated_sensor': self.calibrated_sensors,
-            'category': self.categories,
-            'ego_pose': self.ego_poses,
-            'instance': self.instances,
-            'log': self.logs,
-            'map': self.maps,
-            'sample': self.samples,
-            'sample_annotation': self.sample_annotations,
-            'sample_data': self.sample_data,
-            'scene': self.scenes,
-            'sensor': self.sensors,
-            'visibility': self.visibilities,
-        }
-
-        for name, data in metadata_files.items():
-            output_path = self.output_base / f'{name}.json'
-            if name == 'sample':
-                print(f"DEBUG: Writing {len(self.samples)} samples to sample.json")  # Debugging output before writing samples
-                print(f"DEBUG: Sample data before writing: {data}")  # Debugging output to verify sample data before writing
-            with open(output_path, 'w') as f:
-                json.dump(data, f, indent=2)
-
     def _write_output(self, table_name: str, data: List[dict]):
         """Write a specific NuScenes table to a JSON file.
 
@@ -487,9 +636,16 @@ class NuScenesConverter:
             table_name: The name of the NuScenes table (e.g., 'scene', 'sample').
             data: The list of records to write to the file.
         """
-        output_path = self.output_base / f"{table_name}.json"
+        # Create version directory if it doesn't exist
+        version_dir = self.output_base / self.version
+        version_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Write JSON files ONLY to version directory
+        output_path = version_dir / f"{table_name}.json"
         with open(output_path, 'w') as f:
             json.dump(data, f, indent=2)
+            
+        print(f"Writing {table_name}.json to {output_path}")
 
     def _write_all_tables(self):
         """Write all NuScenes tables to their respective JSON files."""
@@ -505,8 +661,20 @@ class NuScenesConverter:
             'sample_data': self.sample_data,
             'scene': self.scenes,
             'visibility': self.visibilities,
+            'sensor': self.sensors,
+            'calibrated_sensor': self.calibrated_sensors
         }
 
+        # Create required directories
+        version_dir = self.output_base / self.version
+        samples_dir = self.output_base / 'samples'
+        sweeps_dir = self.output_base / 'sweeps'
+        maps_dir = self.output_base / 'maps'
+        
+        for directory in [version_dir, samples_dir, sweeps_dir, maps_dir]:
+            directory.mkdir(parents=True, exist_ok=True)
+
+        # Write JSON files only to version directory
         for table_name, data in tables.items():
             self._write_output(table_name, data)
 

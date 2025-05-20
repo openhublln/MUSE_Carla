@@ -19,45 +19,54 @@ class SampleGenerator:
         if not timestamps:
             return []
 
-        timestamps.sort()
-        interval = int(1000 / target_rate)  # Convert to milliseconds
-        keyframes = [timestamps[0]]
+        # Sort timestamps and remove duplicates
+        timestamps = sorted(set(timestamps))
         
-        bbox_timestamps: Set[int] = set()
-        # Assuming self.converter.input_base is a Path object
-        # Iterate through all scene folders detected by the converter
-        for scene_folder_name in self.converter.scene_folders: # Iterate over detected scene folders
+        # Get all timestamps that have data files
+        data_timestamps = set()
+        for scene_folder_name in self.converter.scene_folders:
             scene_path = self.converter.input_base / scene_folder_name
-            for sensor_folder in scene_path.iterdir(): # Iterate over sensor folders within each scene
+            for sensor_folder in scene_path.iterdir():
                 if not sensor_folder.is_dir():
                     continue
-                # Check for 3dbbox files in each sensor folder
-                bbox_files = list(sensor_folder.glob("*_3dbbox.json"))
-                for bbox_file in bbox_files:
+                # Get all data files (excluding bbox files)
+                data_files = [f for f in sensor_folder.glob("*.*") 
+                            if not f.name.endswith(('_bbox.json', '_3dbbox.json'))]
+                for data_file in data_files:
                     try:
-                        if bbox_file.stat().st_size > 2:
-                            ts = int(bbox_file.stem.split('_')[0])
-                            bbox_timestamps.add(ts)
+                        ts = int(data_file.stem.split('_')[0])
+                        data_timestamps.add(ts)
                     except (ValueError, IndexError):
                         continue
-        
-        last_keyframe = timestamps[0]
-        for ts in timestamps[1:]:
+
+        # Only keep timestamps that have actual data files
+        valid_timestamps = [ts for ts in timestamps if ts in data_timestamps]
+        if not valid_timestamps:
+            return []
+
+        # If target rate is 20Hz (same as CARLA), keep all timestamps
+        if abs(target_rate - 20.0) < 0.1:  # Using small epsilon for float comparison
+            return valid_timestamps
+
+        # For other rates, downsample
+        interval = int(1000 / target_rate)
+        keyframes = [valid_timestamps[0]]
+        last_keyframe = valid_timestamps[0]
+
+        for ts in valid_timestamps[1:]:
             time_diff = ts - last_keyframe
             
             if time_diff >= interval:
-                candidates = [t for t in timestamps if t > last_keyframe and t <= ts]
-                if not candidates: continue # Should not happen if timestamps is not empty and sorted
+                candidates = [t for t in valid_timestamps if t > last_keyframe and t <= ts]
+                if not candidates:
+                    continue
 
-                bbox_candidates = [t for t in candidates if t in bbox_timestamps]
-                if bbox_candidates:
-                    next_keyframe = min(bbox_candidates, key=lambda x: abs(x - (last_keyframe + interval)))
-                else:
-                    next_keyframe = min(candidates, key=lambda x: abs(x - (last_keyframe + interval)))
+                next_keyframe = min(candidates, key=lambda x: abs(x - (last_keyframe + interval)))
                 
                 if next_keyframe not in keyframes:
                     keyframes.append(next_keyframe)
                     last_keyframe = next_keyframe
+
         return keyframes
 
     def generate_sample_entries(self, keyframes: List[int], scene_token: str) -> List[dict]:

@@ -25,7 +25,9 @@ class SensorCalibratedGenerators:
                 }
                 self.converter.sensors.append(sensor_entry)
                 self.converter.sensor_name_to_token[sensor_name] = token
-        sensor_output_path = self.converter.output_base / 'sensor.json'
+        sensor_output_path = self.converter.output_base / self.converter.version / 'sensor.json'
+        # Ensure the version directory exists
+        sensor_output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(sensor_output_path, 'w') as f:
             json.dump(self.converter.sensors, f, indent=2)
 
@@ -33,7 +35,7 @@ class SensorCalibratedGenerators:
         self.converter.calibrated_sensors = []
         simulation_sensors = self.converter.sim_config.get("sensors", [])
         # Build sensor name to token mapping from sensor.json
-        sensor_json_path = self.converter.output_base / 'sensor.json'
+        sensor_json_path = self.converter.output_base / self.converter.version / 'sensor.json'
         with open(sensor_json_path, 'r') as f:
             sensor_json = json.load(f)
         sensor_name_to_token = {entry["channel"]: entry["token"] for entry in sensor_json}
@@ -74,6 +76,8 @@ class SensorCalibratedGenerators:
                 }
                 self.converter.calibrated_sensors.append(calibrated_sensor_entry)
         # Write calibrated_sensor.json immediately after generating
-        calibrated_output_path = self.converter.output_base / 'calibrated_sensor.json'
+        calibrated_output_path = self.converter.output_base / self.converter.version / 'calibrated_sensor.json'
+        # Ensure the version directory exists
+        calibrated_output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(calibrated_output_path, 'w') as f:
             json.dump(self.converter.calibrated_sensors, f, indent=2) 
