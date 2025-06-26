@@ -3,6 +3,7 @@ from pathlib import Path
 from nuscene_utils import generate_token, euler_to_quaternion, adjust_z_for_ego_pose
 from PIL import Image
 import shutil
+import numpy as np
 
 class SampleDataGenerator:
     def __init__(self, converter):
@@ -126,9 +127,15 @@ class SampleDataGenerator:
                 fileformat = "jpg"  # Changed from png to jpg for nuScenes compatibility
                 width = int(float(sensor.get("attributes", {}).get("image_size_x", 0)))
                 height = int(float(sensor.get("attributes", {}).get("image_size_y", 0)))
-            elif sensor_type in ("lidar", "semantic_lidar", "radar"):
+            elif sensor_type == "lidar":
                 ext = ".npy"
-                fileformat = "npy"
+                fileformat = "bin"  # Use .bin for LIDAR in nuScenes
+            elif sensor_type == "radar":
+                ext = ".npy"
+                fileformat = "pcd"  # Use .pcd for RADAR in nuScenes
+            elif sensor_type == "semantic_lidar":
+                ext = ".npy"
+                fileformat = "bin"  # Use .bin for semantic LIDAR
             elif sensor_type in ("imu", "gnss"):
                 ext = ".json"
                 fileformat = "json"
@@ -166,6 +173,12 @@ class SampleDataGenerator:
                     # Create the correct filename for nuScenes format
                     if sensor_type == "camera":
                         filename = f"samples/{channel}/{timestamp}.jpg"
+                    elif sensor_type == "lidar":
+                        filename = f"samples/{channel}/{timestamp}.bin"
+                    elif sensor_type == "radar":
+                        filename = f"samples/{channel}/{timestamp}.pcd"
+                    elif sensor_type == "semantic_lidar":
+                        filename = f"samples/{channel}/{timestamp}.bin"
                     else:
                         filename = f"samples/{channel}/{timestamp}{ext}"
                     
@@ -176,6 +189,40 @@ class SampleDataGenerator:
                         img = Image.open(file)
                         img.convert('RGB').save(target_file, 'JPEG')
                         print(f"Converted and copied {file.name} to {target_file.name}")
+                    elif sensor_type == "lidar":
+                        # Convert NPY to BIN for LIDAR
+                        points = np.load(file)
+                        points.astype(np.float32).tofile(target_file)
+                        print(f"Converted {file.name} to {target_file.name}")
+                    elif sensor_type == "radar":
+                        # Convert NPY to PCD for RADAR
+                        points = np.load(file)
+                        # Ensure 18-column format for RADAR
+                        if points.shape[1] < 18:
+                            padded_points = np.zeros((points.shape[0], 18))
+                            padded_points[:, :points.shape[1]] = points
+                            points = padded_points
+                        
+                        # Write binary PCD file
+                        with open(target_file, 'wb') as f:
+                            f.write(b"# .PCD v0.7 - Point Cloud Data file format\n")
+                            f.write(b"VERSION 0.7\n")
+                            f.write(b"FIELDS x y z dyn_prop id rcs vx vy vx_comp vy_comp is_quality_valid ambig_state x_rms y_rms invalid_state pdh0 vx_rms vy_rms\n")
+                            f.write(b"SIZES 4 4 4 1 2 4 4 4 4 4 1 1 1 1 1 1 1 1\n")
+                            f.write(b"TYPES F F F I I F F F F F I I I I I I I I\n")
+                            f.write(b"COUNTS 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1\n")
+                            f.write(f"WIDTH {points.shape[0]}\n".encode())
+                            f.write(b"HEIGHT 1\n")
+                            f.write(b"VIEWPOINT 0 0 0 1 0 0 0\n")
+                            f.write(f"POINTS {points.shape[0]}\n".encode())
+                            f.write(b"DATA binary\n")
+                            points.astype(np.float32).tofile(f)
+                        print(f"Converted {file.name} to {target_file.name}")
+                    elif sensor_type == "semantic_lidar":
+                        # Convert NPY to BIN for semantic LIDAR
+                        points = np.load(file)
+                        points.astype(np.float32).tofile(target_file)
+                        print(f"Converted {file.name} to {target_file.name}")
                     else:
                         shutil.copy2(file, target_file)
                         print(f"Copied {file.name} to {target_file.name}")

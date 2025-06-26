@@ -34,13 +34,12 @@ sensor_mappings:
     'Camera_BackLeft': 'CAM_BACKLEFT'
   radar:
     'Radar_Front': 'RADAR_FRONT'
-    'Radar_Back': 'RADAR_BACK'
     'Radar_FrontRight': 'RADAR_FRONTRIGHT'
     'Radar_FrontLeft': 'RADAR_FRONTLEFT'
     'Radar_BackRight': 'RADAR_BACKRIGHT'
     'Radar_BackLeft': 'RADAR_BACKLEFT'
   lidar:
-    'Lidar': 'LIDAR'
+    'Lidar': 'LIDAR_TOP'
   semantic_lidar:
     'Semantic_Lidar': 'SEMANTIC_LIDAR'
   gnss:

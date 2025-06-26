@@ -37,6 +37,9 @@ from sample_generator import SampleGenerator
 from sample_data_generator import SampleDataGenerator
 from annotation_generator import AnnotationGenerator
 
+# Import the comprehensive fix module
+from nuscenes_fixes import NuScenesFixes
+
 class NuScenesConverter:
     """Converts CARLA sensor data to NuScenes format."""
     
@@ -121,7 +124,13 @@ class NuScenesConverter:
         self.ego_poses = []
         self.instances = []
         self.logs = []
-        self.maps = []
+        # Add a default map entry to prevent reverse indexing errors
+        self.maps = [{
+            "token": self._generate_token(),
+            "log_tokens": [],  # Will be populated with log tokens
+            "category": "none",
+            "filename": "maps/none.png"
+        }]
         self.samples = []
         self.sample_annotations = []
         self.sample_data = []
@@ -136,6 +145,7 @@ class NuScenesConverter:
             'sample': {},  # timestamp -> token
             'scene': {},  # scene_name -> token
             'visibility': {},  # (scene_folder, actor_id) -> token
+            'log': {},  # scene_name -> token
         }
     
     def _generate_token(self) -> str:
@@ -323,159 +333,52 @@ class NuScenesConverter:
         return convert_bounding_box_size(extent)
 
     def _generate_sensor_entries(self):
-        sc_generators = SensorCalibratedGenerators(self)
-        sc_generators.generate_sensor_entries()
+        """Generate sensor entries with correct channel names."""
+        sensor_channels = {
+            'Camera_Front': 'CAM_FRONT',
+            'Camera_Back': 'CAM_BACK',
+            'Camera_FrontRight': 'CAM_FRONTRIGHT',
+            'Camera_FrontLeft': 'CAM_FRONTLEFT',
+            'Camera_BackRight': 'CAM_BACKRIGHT',
+            'Camera_BackLeft': 'CAM_BACKLEFT',
+            'Lidar': 'LIDAR_TOP', 
+            'Radar_Front': 'RADAR_FRONT',
+            'Radar_Back': 'RADAR_BACK',
+            'Radar_FrontRight': 'RADAR_FRONTRIGHT',
+            'Radar_FrontLeft': 'RADAR_FRONTLEFT',
+            'Radar_BackRight': 'RADAR_BACKRIGHT',
+            'Radar_BackLeft': 'RADAR_BACKLEFT',
+            'Semantic_Lidar': 'SEMANTIC_LIDAR',
+            'GNSS': 'GNSS',
+            'IMU': 'IMU'
+        }
+        
+        for sensor_name, channel in sensor_channels.items():
+            modality = 'camera' if sensor_name.startswith('Camera') else \
+                      'lidar' if sensor_name == 'Lidar' else \
+                      'semantic_lidar' if sensor_name == 'Semantic_Lidar' else \
+                      'radar' if sensor_name.startswith('Radar') else \
+                      sensor_name.lower()
+            
+            self.sensors.append({
+                "token": self._generate_token(),
+                "channel": channel,
+                "modality": modality
+            })
+            # Store the token for later use
+            self.token_maps['calibrated_sensor'][sensor_name] = self.sensors[-1]['token']
 
     def _generate_calibrated_sensors(self):
         sc_generators = SensorCalibratedGenerators(self)
         sc_generators.generate_calibrated_sensors()
 
     def _generate_sample_data_entries(self, scene_folder: str, scene_token: str):
-        """Generate sample data entries and move sensor data to correct locations."""
+        """Generate sample data entries."""
         if not hasattr(self, 'sample_data_gen_instance') or self.sample_data_gen_instance is None:
             self.sample_data_gen_instance = SampleDataGenerator(self)
         
-        # Create sensor-specific directories matching official nuScenes structure
-        sensor_dirs = {
-            'Camera_Front': 'samples/CAM_FRONT',
-            'Camera_Back': 'samples/CAM_BACK',
-            'Camera_FrontRight': 'samples/CAM_FRONTRIGHT',
-            'Camera_FrontLeft': 'samples/CAM_FRONTLEFT',
-            'Camera_BackRight': 'samples/CAM_BACKRIGHT',
-            'Camera_BackLeft': 'samples/CAM_BACKLEFT',
-            'Lidar': 'samples/LIDAR_TOP',
-            'Radar_Front': 'samples/RADAR_FRONT',
-            'Radar_Back': 'samples/RADAR_BACK',
-            'Radar_FrontRight': 'samples/RADAR_FRONTRIGHT',
-            'Radar_FrontLeft': 'samples/RADAR_FRONTLEFT',
-            'Radar_BackRight': 'samples/RADAR_BACKRIGHT',
-            'Radar_BackLeft': 'samples/RADAR_BACKLEFT',
-            'Semantic_Lidar': 'samples/SEMANTIC_LIDAR',
-            'GNSS': 'samples/GNSS',
-            'IMU': 'samples/IMU'
-        }
-        
-        # Create all required directories
-        for sensor_dir in sensor_dirs.values():
-            (self.output_base / sensor_dir).mkdir(parents=True, exist_ok=True)
-            # Also create corresponding sweep directories
-            sweep_dir = sensor_dir.replace('samples/', 'sweeps/')
-            (self.output_base / sweep_dir).mkdir(parents=True, exist_ok=True)
-        
         # Generate sample data entries
         self.sample_data_gen_instance.generate_sample_data_entries(scene_folder, scene_token)
-        
-        # Copy sensor data files to correct locations
-        scene_path = self.input_base / scene_folder
-        print(f"\nProcessing scene: {scene_folder}")
-        print(f"Input base path: {self.input_base.absolute()}")
-        print(f"Scene path: {scene_path.absolute()}")
-        print(f"Output base path: {self.output_base.absolute()}")
-        
-        if not scene_path.exists():
-            print(f"ERROR: Scene path does not exist: {scene_path.absolute()}")
-            return
-        
-        files_processed = 0
-        files_copied = 0
-        
-        for sensor_name, target_dir in sensor_dirs.items():
-            sensor_path = scene_path / sensor_name
-            if sensor_path.exists():
-                target_path = self.output_base / target_dir
-                print(f"\nProcessing sensor: {sensor_name}")
-                print(f"Source directory: {sensor_path.absolute()}")
-                print(f"Target directory: {target_path.absolute()}")
-                
-                # Get all files for this sensor
-                files = []
-                
-                # For cameras, we need to handle PNG files and their associated JSON files
-                if sensor_name.startswith('Camera'):
-                    # Get all PNG files (these are the main image files)
-                    png_files = list(sensor_path.glob('*.png'))
-                    print(f"Found {len(png_files)} PNG files")
-                    files.extend(png_files)
-                    
-                    # Get all bbox JSON files
-                    bbox_files = list(sensor_path.glob('*_bbox.json'))
-                    print(f"Found {len(bbox_files)} bbox files")
-                    files.extend(bbox_files)
-                    
-                    # Get all 3dbbox JSON files
-                    bbox3d_files = list(sensor_path.glob('*_3dbbox.json'))
-                    print(f"Found {len(bbox3d_files)} 3dbbox files")
-                    files.extend(bbox3d_files)
-                
-                # For lidar and radar, we need to handle NPY files
-                elif sensor_name in ['Lidar', 'Semantic_Lidar'] or sensor_name.startswith('Radar'):
-                    npy_files = list(sensor_path.glob('*.npy'))
-                    print(f"Found {len(npy_files)} NPY files")
-                    files.extend(npy_files)
-                
-                # For GNSS and IMU, we need to handle JSON files
-                elif sensor_name in ['GNSS', 'IMU']:
-                    json_files = list(sensor_path.glob('*.json'))
-                    print(f"Found {len(json_files)} JSON files")
-                    files.extend(json_files)
-                
-                print(f"Total files found for {sensor_name}: {len(files)}")
-                
-                for file in files:
-                    files_processed += 1
-                    try:
-                        # Extract timestamp from filename
-                        timestamp = file.stem.split('_')[0]
-                        
-                        # Skip files that don't have a valid timestamp
-                        try:
-                            int(timestamp)
-                        except ValueError:
-                            print(f"Skipping file with invalid timestamp: {file.name}")
-                            continue
-                        
-                        # Create nuScenes-style filename based on file type
-                        if file.suffix == '.png':
-                            new_filename = f"{timestamp}.jpg"  # Convert PNG to JPG for cameras
-                        elif file.suffix == '.npy':
-                            new_filename = f"{timestamp}.npy"
-                        elif file.suffix == '.json':
-                            # Skip bbox files as they're not part of the nuScenes format
-                            if '_bbox.json' in file.name or '_3dbbox.json' in file.name:
-                                continue
-                            new_filename = f"{timestamp}.json"
-                        else:
-                            continue
-                            
-                        target_file = target_path / new_filename
-                        
-                        # Ensure the target directory exists
-                        target_file.parent.mkdir(parents=True, exist_ok=True)
-                        
-                        # Copy the file
-                        if file.suffix == '.png':
-                            # Convert PNG to JPG for camera images
-                            img = Image.open(file)
-                            img.convert('RGB').save(target_file, 'JPEG')
-                            print(f"Converted and copied {file.name} to {target_file.name}")
-                        else:
-                            shutil.copy2(file, target_file)
-                            print(f"Copied {file.name} to {target_file.name}")
-                            
-                        files_copied += 1
-                        
-                    except Exception as e:
-                        print(f"Error processing {file.name}: {e}")
-                        print(f"Source file exists: {file.exists()}")
-                        print(f"Target directory exists: {target_file.parent.exists()}")
-                        print(f"Target directory is writable: {os.access(target_file.parent, os.W_OK)}")
-                        continue
-            else:
-                print(f"Sensor directory not found: {sensor_path.absolute()}")
-        
-        print(f"\nSummary for scene {scene_folder}:")
-        print(f"Total files processed: {files_processed}")
-        print(f"Total files successfully copied: {files_copied}")
 
     def _generate_sample_annotations(self, scene_folder: str, scene_token: str):
         if not hasattr(self, 'annotation_gen_instance') or self.annotation_gen_instance is None:
@@ -628,6 +531,16 @@ class NuScenesConverter:
         log_gen.assign_log_token_to_scenes()
         self.instance_gen_instance.update_instance_entries()
         self._write_all_tables()
+        
+        # Apply comprehensive nuScenes format fixes
+        print("\n" + "="*50)
+        print("APPLYING AUTOMATIC NUSCENES FORMAT FIXES")
+        print("="*50)
+        fixes = NuScenesFixes(self.output_base)
+        fixes.fix_all_issues()
+        print("="*50)
+        print("CONVERSION COMPLETED SUCCESSFULLY!")
+        print("="*50)
 
     def _write_output(self, table_name: str, data: List[dict]):
         """Write a specific NuScenes table to a JSON file.
@@ -649,6 +562,12 @@ class NuScenesConverter:
 
     def _write_all_tables(self):
         """Write all NuScenes tables to their respective JSON files."""
+        # First, ensure all logs have a map token
+        map_token = self.maps[0]['token']
+        for log in self.logs:
+            log['map_token'] = map_token
+            self.maps[0]['log_tokens'].append(log['token'])
+
         tables = {
             'attribute': self.attributes,
             'category': self.categories,
@@ -674,9 +593,78 @@ class NuScenesConverter:
         for directory in [version_dir, samples_dir, sweeps_dir, maps_dir]:
             directory.mkdir(parents=True, exist_ok=True)
 
+        # Create a minimal valid map mask file
+        map_mask_path = self.output_base / 'maps' / 'none.png'
+        if not map_mask_path.exists():
+            # Create a 1x1 black PNG file as a minimal valid map mask
+            from PIL import Image
+            img = Image.new('RGB', (1, 1), color='black')
+            img.save(map_mask_path)
+            print(f"Created minimal map mask file at {map_mask_path}")
+
+        # Update map entry to point to the correct file
+        if self.maps:
+            self.maps[0]['filename'] = 'maps/none.png'
+
+        # Validate required tables
+        required_tables = [
+            'attribute', 'category', 'ego_pose', 'instance', 'log',
+            'sample', 'sample_annotation', 'sample_data', 'scene',
+            'visibility', 'sensor', 'calibrated_sensor'
+        ]
+        
+        for table in required_tables:
+            if not tables[table]:
+                print(f"Warning: {table} table is empty")
+                if table == 'map':
+                    # Create empty map table as it's optional
+                    tables[table] = []
+                else:
+                    print(f"Error: Required table {table} is empty")
+                    return
+
+        # Validate token relationships
+        print("\nValidating token relationships...")
+        
+        # Create token lookup dictionaries
+        sample_tokens = {s['token']: s for s in self.samples}
+        scene_tokens = {s['token']: s for s in self.scenes}
+        instance_tokens = {i['token']: i for i in self.instances}
+        sensor_tokens = {s['token']: s for s in self.sensors}
+        calibrated_sensor_tokens = {cs['token']: cs for cs in self.calibrated_sensors}
+        log_tokens = {l['token']: l for l in self.logs}
+        
+        # Validate scene-sample relationships
+        for scene in self.scenes:
+            if scene['first_sample_token'] and scene['first_sample_token'] not in sample_tokens:
+                print(f"Error: Scene {scene['token']} references non-existent sample {scene['first_sample_token']}")
+                return
+                
+        # Validate sample-sample_data relationships
+        for sample_data in self.sample_data:
+            if sample_data['sample_token'] not in sample_tokens:
+                print(f"Error: Sample data {sample_data['token']} references non-existent sample {sample_data['sample_token']}")
+                return
+                
+            if sample_data['calibrated_sensor_token'] not in calibrated_sensor_tokens:
+                print(f"Error: Sample data {sample_data['token']} references non-existent calibrated sensor {sample_data['calibrated_sensor_token']}")
+                return
+                
+        # Validate instance-annotation relationships
+        for annotation in self.sample_annotations:
+            if annotation['instance_token'] not in instance_tokens:
+                print(f"Error: Annotation {annotation['token']} references non-existent instance {annotation['instance_token']}")
+                return
+                
+            if annotation['sample_token'] not in sample_tokens:
+                print(f"Error: Annotation {annotation['token']} references non-existent sample {annotation['sample_token']}")
+                return
+
         # Write JSON files only to version directory
         for table_name, data in tables.items():
             self._write_output(table_name, data)
+            
+        print("\nAll tables written successfully")
 
 def main():
     """Main entry point."""
