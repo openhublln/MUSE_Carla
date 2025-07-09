@@ -48,9 +48,9 @@ def convert_bounding_box_size(extent: carla.Vector3D) -> List[float]:
         A list representing the size [width, length, height] in NuScenes format.
     """
     # Double the extent values to get full dimensions
-    width = extent.y * 2  # CARLA y -> NuScenes width
-    length = extent.x * 2  # CARLA x -> NuScenes length
-    height = extent.z * 2  # CARLA z -> NuScenes height
+    width = extent.y * 2   # CARLA y -> NuScenes width (Y)
+    length = extent.x * 2  # CARLA x -> NuScenes length (X)
+    height = extent.z * 2  # CARLA z -> NuScenes height (Z)
     return [width, length, height]
 
 def transform_to_global_frame(transform: carla.Transform, global_origin: np.ndarray) -> dict:
@@ -224,4 +224,48 @@ def count_points_in_box(points: np.ndarray, box_center: List[float], box_size: L
     for point in point_positions:
         if is_point_in_box(point, box_center, box_size, box_rotation):
             count += 1
-    return count 
+    return count
+
+def transform_box_to_ego_frame(box_center_world: List[float], box_rotation_world: List[float], 
+                              ego_translation: List[float], ego_rotation: List[float]) -> Tuple[List[float], List[float]]:
+    """Transform bounding box from CARLA world coordinates to ego vehicle coordinates.
+    
+    Args:
+        box_center_world: [x, y, z] center of box in CARLA world coordinates
+        box_rotation_world: quaternion [w, x, y, z] of box rotation in world coordinates
+        ego_translation: [x, y, z] ego vehicle position in CARLA world coordinates
+        ego_rotation: quaternion [w, x, y, z] of ego vehicle rotation in world coordinates
+        
+    Returns:
+        Tuple of (box_center_ego, box_rotation_ego) in ego vehicle coordinates
+    """
+    # Convert to numpy arrays
+    box_center_world = np.array(box_center_world)
+    ego_translation = np.array(ego_translation)
+    
+    # Get ego rotation matrix (world to ego)
+    qw, qx, qy, qz = ego_rotation
+    ego_rotation_matrix = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
+    
+    # Transform box center: world -> ego
+    # 1. Translate to ego-relative position
+    box_center_relative = box_center_world - ego_translation
+    # 2. Rotate to ego frame
+    box_center_ego = ego_rotation_matrix.T @ box_center_relative
+
+    # --- FIX: Flip Y axis to convert CARLA (Y-right) to nuScenes (Y-left) ---
+    box_center_ego[1] *= -1
+    
+    # Transform box rotation: world -> ego
+    # 1. Get world rotation matrix for box
+    qw, qx, qy, qz = box_rotation_world
+    box_rotation_matrix_world = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
+    # 2. Transform to ego frame: ego_rotation.T @ box_rotation_world
+    box_rotation_matrix_ego = ego_rotation_matrix.T @ box_rotation_matrix_world
+    # (No additional 180-degree rotation)
+    # 3. Convert back to quaternion
+    box_rotation_ego = Rotation.from_matrix(box_rotation_matrix_ego).as_quat()
+    # Convert to nuScenes format [w, x, y, z]
+    box_rotation_ego = [box_rotation_ego[3], box_rotation_ego[0], box_rotation_ego[1], box_rotation_ego[2]]
+    
+    return box_center_ego.tolist(), box_rotation_ego 

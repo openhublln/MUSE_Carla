@@ -9,6 +9,47 @@ class SampleDataGenerator:
     def __init__(self, converter):
         self.converter = converter
 
+    def generate_ego_poses_for_scene(self, scene_folder: str):
+        """Generate ego poses for a scene. This is called before annotation generation."""
+        scene_path = self.converter.input_base / scene_folder
+        ego_pose_dir = scene_path / self.converter.EGO_POSE_FOLDER
+        
+        if ego_pose_dir.exists():
+            for pose_file in ego_pose_dir.glob("*.json"):
+                try:
+                    timestamp = int(pose_file.stem)
+                    with open(pose_file, 'r') as f:
+                        pose_data = json.load(f)
+                        
+                    translation = [
+                        float(pose_data["translation"]["x"]),
+                        float(pose_data["translation"]["y"]),
+                        float(pose_data["translation"]["z"])
+                    ]
+                    
+                    # Convert CARLA Euler angles to NuScenes quaternion
+                    rotation = euler_to_quaternion(
+                        float(pose_data["rotation"]["roll"]),
+                        float(pose_data["rotation"]["pitch"]),
+                        float(pose_data["rotation"]["yaw"])
+                    )
+                    
+                    # In nuScenes, ego pose is always at [0,0,0] in ego coordinates
+                    # Store the world coordinates for transformation purposes
+                    token = generate_token()
+                    ego_pose_entry = {
+                        "token": token,
+                        "timestamp": timestamp,
+                        "translation": [0.0, 0.0, 0.0],  # Ego is always at origin in ego frame
+                        "rotation": [1.0, 0.0, 0.0, 0.0]  # No rotation in ego frame
+                    }
+                    
+                    self.converter.ego_poses.append(ego_pose_entry)
+                    
+                except Exception as e:
+                    print(f"Warning: Error processing ego pose file {pose_file}: {e}")
+                    continue
+
     def generate_sample_data_entries(self, scene_folder: str, scene_token: str):
         scene_path = self.converter.input_base / scene_folder
         sensor_json_path = self.converter.output_base / self.converter.version / 'sensor.json'
@@ -70,42 +111,10 @@ class SampleDataGenerator:
         ego_pose_dir = scene_path / self.converter.EGO_POSE_FOLDER
         ego_pose_timestamps = {}
         if ego_pose_dir.exists():
-            for pose_file in ego_pose_dir.glob("*.json"):
-                try:
-                    timestamp = int(pose_file.stem)
-                    with open(pose_file, 'r') as f:
-                        pose_data = json.load(f)
-                        
-                    translation = [
-                        float(pose_data["translation"]["x"]),
-                        float(pose_data["translation"]["y"]),
-                        float(pose_data["translation"]["z"])
-                    ]
-                    
-                    # Convert CARLA Euler angles to NuScenes quaternion
-                    rotation = euler_to_quaternion(
-                        float(pose_data["rotation"]["roll"]),
-                        float(pose_data["rotation"]["pitch"]),
-                        float(pose_data["rotation"]["yaw"])
-                    )
-                    
-                    # Adjust Z coordinate to match NuScenes' Z=0 assumption
-                    translation = adjust_z_for_ego_pose(translation)
-                    
-                    token = generate_token()
-                    ego_pose_entry = {
-                        "token": token,
-                        "timestamp": timestamp,
-                        "translation": translation,
-                        "rotation": rotation
-                    }
-                    
-                    self.converter.ego_poses.append(ego_pose_entry)
-                    ego_pose_timestamps[timestamp] = token
-                    
-                except Exception as e:
-                    print(f"Warning: Error processing ego pose file {pose_file}: {e}")
-                    continue
+            # Create mapping from timestamp to ego pose token using already generated ego poses
+            for ego_pose_entry in self.converter.ego_poses:
+                # Only include ego poses from this scene (we can't easily filter by scene, so include all)
+                ego_pose_timestamps[ego_pose_entry["timestamp"]] = ego_pose_entry["token"]
 
         for sensor in simulation_sensors:
             sensor_name = sensor["name"]

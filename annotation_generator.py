@@ -2,7 +2,7 @@ import json
 import numpy as np
 from typing import List, Dict
 # Assuming nuscene_utils and carla types are available or passed through self.converter
-from nuscene_utils import generate_token, euler_to_quaternion, count_points_in_box, transform_points_to_global, transform_radar_points_to_global
+from nuscene_utils import generate_token, euler_to_quaternion, count_points_in_box, transform_points_to_global, transform_radar_points_to_global, transform_box_to_ego_frame
 import carla # For carla.Transform type hint if needed directly
 
 class AnnotationGenerator:
@@ -142,8 +142,45 @@ class AnnotationGenerator:
                             float(translation_data.get("y", 0)),
                             float(translation_data.get("z", 0))
                         ]
-                        box_size = annotation_data.get("size", [0,0,0]) # This should be NuScenes format [w,l,h]
-                                                
+                        box_size = annotation_data.get("size", [0,0,0])
+
+                        # Get ego pose for this timestamp
+                        ego_pose = None
+                        if not hasattr(self, '_ego_pose_timestamp_map'):
+                            self._ego_pose_timestamp_map = {}
+                            for ego_pose_entry in self.converter.ego_poses:
+                                self._ego_pose_timestamp_map[ego_pose_entry["timestamp"]] = ego_pose_entry
+                        ego_pose = self._ego_pose_timestamp_map.get(timestamp)
+                        
+                        # Reconstruct world pose from the original ego_pose JSON file
+                        world_translation = [0.0, 0.0, 0.0]
+                        world_rotation = [1.0, 0.0, 0.0, 0.0]
+                        scene_path = self.converter.input_base / scene_folder
+                        ego_pose_file = scene_path / self.converter.EGO_POSE_FOLDER / f"{timestamp}.json"
+                        if ego_pose_file.exists():
+                            try:
+                                with open(ego_pose_file, 'r') as f:
+                                    pose_data = json.load(f)
+                                world_translation = [
+                                    float(pose_data["translation"]["x"]),
+                                    float(pose_data["translation"]["y"]),
+                                    float(pose_data["translation"]["z"])
+                                ]
+                                world_rotation = euler_to_quaternion(
+                                    float(pose_data["rotation"]["roll"]),
+                                    float(pose_data["rotation"]["pitch"]),
+                                    float(pose_data["rotation"]["yaw"])
+                                )
+                            except Exception as e:
+                                print(f"Warning: Could not load world pose for annotation transformation: {e}")
+                        else:
+                            print(f"Warning: Ego pose file not found for timestamp {timestamp}")
+                        # Transform box center and rotation to ego frame
+                        box_center, quaternion = transform_box_to_ego_frame(
+                            box_center, quaternion,
+                            world_translation, world_rotation
+                        )
+                        
                         num_lidar_pts = 0
                         # Assuming Lidar data is in a folder named as per sim_config sensor name
                         # This part relies on self.converter._get_sensor_transform which is in NuScenesConverter

@@ -499,9 +499,6 @@ class NuScenesConverter:
         # After generating samples and calibrated sensors, generate sample_data
         self.sample_data_gen_instance.generate_sample_data_entries(scene_folder, scene_token)
 
-        # Instance entries are generated per scene using the instance created in convert_all
-        # self.instance_gen_instance.generate_instance_entries(scene_folder, scene_token) # Moved up
-
     def convert_all(self):
         """Convert all scenes specified in the config."""
         # Initialize the new generator classes
@@ -523,6 +520,12 @@ class NuScenesConverter:
         self.sample_gen_instance = SampleGenerator(self) # Initialize SampleGenerator
         self.sample_data_gen_instance = SampleDataGenerator(self) # Initialize SampleDataGenerator
         self.annotation_gen_instance = AnnotationGenerator(self) # Initialize AnnotationGenerator
+
+        # Generate ego poses for all scenes first (before any annotation generation)
+        print("Generating ego poses for all scenes...")
+        for scene_folder in self.scene_folders:
+            self.sample_data_gen_instance.generate_ego_poses_for_scene(scene_folder)
+        print(f"Generated {len(self.ego_poses)} ego poses total")
 
         for scene_folder in self.scene_folders:
             print(f"Processing scene: {scene_folder}")

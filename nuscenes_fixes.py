@@ -7,6 +7,8 @@ from pathlib import Path
 import shutil
 from PIL import Image
 import struct
+import yaml
+from scipy.spatial.transform import Rotation
 
 class NuScenesFixes:
     """Comprehensive fix module for nuScenes data format issues."""
@@ -28,7 +30,7 @@ class NuScenesFixes:
         # 3. Fix sample data mapping
         self.fix_sample_data_mapping()
         
-        # 4. Fix camera intrinsics
+        # 4. Fix camera intrinsic matrices
         self.fix_camera_intrinsics()
         
         # 5. Fix LIDAR data quality
@@ -121,30 +123,65 @@ class NuScenesFixes:
         return converted
     
     def _convert_lidar_files(self, source_path: Path, target_path: Path) -> int:
-        """Convert LIDAR NPY files to BIN format."""
+        """Convert LIDAR NPY files to BIN format, applying sensor-to-ego transformation."""
         converted = 0
-        
+        # Always use the nuScenes output calibration file
+        calib_file = self.version_dir / 'calibrated_sensor.json'
+        sensor_file = self.version_dir / 'sensor.json'
+        calib = None
+        if calib_file.exists() and sensor_file.exists():
+            with open(calib_file, 'r') as f:
+                calibs = json.load(f)
+            with open(sensor_file, 'r') as f:
+                sensors = json.load(f)
+            # Build mapping from sensor_token to channel and modality
+            sensor_token_to_channel = {s['token']: s['channel'] for s in sensors}
+            sensor_token_to_modality = {s['token']: s['modality'] for s in sensors}
+            # Find LIDAR calibration
+            for c in calibs:
+                sensor_token = c.get('sensor_token')
+                channel = sensor_token_to_channel.get(sensor_token, None)
+                modality = sensor_token_to_modality.get(sensor_token, None)
+                if (modality == 'lidar') or (channel == 'LIDAR_TOP'):
+                    calib = c
+                    print(f"Found LIDAR calibration: channel={channel}, modality={modality}")
+                    break
+            if calib is None:
+                print("Available calibration entries in calibrated_sensor.json:")
+                for c in calibs:
+                    sensor_token = c.get('sensor_token')
+                    channel = sensor_token_to_channel.get(sensor_token, None)
+                    modality = sensor_token_to_modality.get(sensor_token, None)
+                    print(f"  channel: {channel}, modality: {modality}")
         for npy_file in source_path.glob('*.npy'):
             try:
                 timestamp = npy_file.stem.split('_')[0]
                 target_file = target_path / f"{timestamp}.bin"
-                
                 # Load and convert NPY to BIN
                 points = np.load(npy_file)
-                
+                # Apply sensor-to-ego transformation if calibration is available
+                if calib is not None:
+                    t = np.array(calib['translation'])
+                    q = calib['rotation']  # [w, x, y, z]
+                    print(f"Applying LIDAR calibration: translation={t}, rotation={q} to {npy_file.name}")
+                    r = Rotation.from_quat([q[1], q[2], q[3], q[0]])
+                    points_xyz = points[:, :3]
+                    points_xyz = r.apply(points_xyz) + t
+                    points[:, :3] = points_xyz
+                else:
+                    print(f"NO LIDAR CALIBRATION FOUND for {npy_file.name} -- points will NOT be transformed!")
+                # Mirror flip along Y axis to match annotation referential
+                points[:, 1] *= -1
                 # Ensure 5-column format (x, y, z, intensity, ring_index)
                 if points.shape[1] < 5:
                     padded_points = np.zeros((points.shape[0], 5))
                     padded_points[:, :points.shape[1]] = points
                     points = padded_points
-                
                 # Save as binary
                 points.astype(np.float32).tofile(target_file)
                 converted += 1
-                
             except Exception as e:
                 print(f"    Error converting {npy_file.name}: {e}")
-        
         return converted
     
     def _convert_radar_files(self, source_path: Path, target_path: Path) -> int:
@@ -252,56 +289,103 @@ class NuScenesFixes:
                 sample_data_lookup[sample_token][channel] = sd['token']
         
         # Update samples with data field
-        updated_count = 0
         for sample in samples:
             sample_token = sample['token']
-            if sample_token in sample_data_lookup:
-                sample['data'] = sample_data_lookup[sample_token]
-                updated_count += 1
+            # The following lines are removed to avoid adding the non-standard 'data' field:
+            # if sample_token in sample_data_lookup:
+            #     sample['data'] = sample_data_lookup[sample_token]
+            #     updated_count += 1
         
         with open(sample_file, 'w') as f:
             json.dump(samples, f, indent=2)
         
-        print(f"  Updated {updated_count} samples with data field mappings")
+        print(f"  Checked {len(samples)} samples for data field mappings (no 'data' field added)")
     
     def fix_camera_intrinsics(self):
-        """Fix camera intrinsic matrices in calibrated_sensor.json."""
+        """Fix camera intrinsic matrices in calibrated_sensor.json using config.yml values."""
         print("4. Fixing camera intrinsic matrices...")
         
         calibrated_file = self.version_dir / 'calibrated_sensor.json'
         sensor_file = self.version_dir / 'sensor.json'
+        config_file = Path('config.yml')
         
-        if not calibrated_file.exists() or not sensor_file.exists():
-            print("  Warning: calibrated_sensor.json or sensor.json not found")
+        if not calibrated_file.exists() or not sensor_file.exists() or not config_file.exists():
+            print("  Warning: calibrated_sensor.json, sensor.json, or config.yml not found")
             return
         
         with open(calibrated_file, 'r') as f:
             calibrated_sensors = json.load(f)
         with open(sensor_file, 'r') as f:
             sensors = json.load(f)
+        with open(config_file, 'r') as f:
+            config = yaml.safe_load(f)
         
-        # Create mapping from sensor_token to modality
-        sensor_token_to_modality = {s['token']: s['modality'] for s in sensors}
-        
-        # Standard camera intrinsic matrix (placeholder values)
-        # These should be replaced with actual camera calibration data
-        standard_intrinsics = [
-            [1000.0, 0.0, 960.0],
-            [0.0, 1000.0, 540.0],
-            [0.0, 0.0, 1.0]
-        ]
-        
+        # Build a mapping from sensor name to attributes for cameras
+        camera_params = {}
+        for sensor in config.get('sensors', []):
+            if sensor.get('type') == 'camera':
+                name = sensor['name']
+                attrs = sensor.get('attributes', {})
+                try:
+                    image_size_x = float(attrs.get('image_size_x', 800))
+                    image_size_y = float(attrs.get('image_size_y', 600))
+                    fov = float(attrs.get('fov', 90))
+                except Exception:
+                    image_size_x, image_size_y, fov = 800, 600, 90
+                camera_params[name] = {
+                    'image_size_x': image_size_x,
+                    'image_size_y': image_size_y,
+                    'fov': fov
+                }
+        # Map sensor_token to channel and name
+        sensor_token_to_channel = {s['token']: s['channel'] for s in sensors}
+        sensor_token_to_name = {s['token']: s.get('channel', s.get('name', '')) for s in sensors}
+        # For each camera calibrated sensor, compute and set the intrinsic matrix
         fixed_count = 0
         for calibrated_sensor in calibrated_sensors:
             sensor_token = calibrated_sensor.get('sensor_token')
-            if sensor_token and sensor_token_to_modality.get(sensor_token) == 'camera':
-                if not calibrated_sensor.get('camera_intrinsic') or calibrated_sensor['camera_intrinsic'] == []:
-                    calibrated_sensor['camera_intrinsic'] = standard_intrinsics
-                    fixed_count += 1
-        
+            channel = sensor_token_to_channel.get(sensor_token, '')
+            # Map nuScenes channel to config name
+            # e.g. CAM_FRONT -> Camera_Front
+            config_name = None
+            for name in camera_params:
+                if name.upper().replace('CAMERA_', 'CAM_') == channel:
+                    config_name = name
+                    break
+            if not config_name:
+                # Try fallback: match by suffix
+                for name in camera_params:
+                    if name.split('_')[-1].upper() in channel:
+                        config_name = name
+                        break
+            if config_name:
+                params = camera_params[config_name]
+                w = params['image_size_x']
+                h = params['image_size_y']
+                fov = params['fov']
+                fx = fy = w / (2 * np.tan(np.deg2rad(fov) / 2))
+                cx = w / 2
+                cy = h / 2
+                intrinsic = [
+                    [fx, 0.0, cx],
+                    [0.0, fy, cy],
+                    [0.0, 0.0, 1.0]
+                ]
+                calibrated_sensor['camera_intrinsic'] = intrinsic
+                
+                # Add camera frame correction matrix
+                # Convert from CARLA camera frame (X-forward, Y-right, Z-up) 
+                # to pinhole camera frame (Z-forward, X-right, Y-down)
+                camera_frame_correction = [
+                    [0.0, 1.0, 0.0],
+                    [0.0, 0.0, -1.0],
+                    [1.0, 0.0, 0.0]
+                ]
+                calibrated_sensor['camera_frame_correction'] = camera_frame_correction
+                
+                fixed_count += 1
         with open(calibrated_file, 'w') as f:
             json.dump(calibrated_sensors, f, indent=2)
-        
         print(f"  Fixed camera intrinsic matrices for {fixed_count} camera sensors")
     
     def fix_lidar_data_quality(self):
