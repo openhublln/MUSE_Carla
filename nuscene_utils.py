@@ -20,16 +20,82 @@ def generate_composite_token(*args: Any) -> str:
     composite_string = "_".join(map(str, args))
     return uuid.uuid5(uuid.NAMESPACE_DNS, composite_string).hex
 
-def euler_to_quaternion(roll: float, pitch: float, yaw: float) -> List[float]:
-    """Convert Euler angles (roll, pitch, yaw) to a Quaternion (w, x, y, z).
+def carla_rotation_to_nuscenes_quaternion(roll: float, pitch: float, yaw: float) -> List[float]:
+    """Convert CARLA rotation to NuScenes quaternion using proper coordinate transformation.
 
     Args:
-        roll: Rotation around the X-axis in degrees.
-        pitch: Rotation around the Y-axis in degrees.
-        yaw: Rotation around the Z-axis in degrees.
+        roll: CARLA rotation around the X-axis in degrees.
+        pitch: CARLA rotation around the Y-axis in degrees.
+        yaw: CARLA rotation around the Z-axis in degrees.
 
     Returns:
-        A list representing the Quaternion [w, x, y, z].
+        A list representing the NuScenes Quaternion [w, x, y, z].
+    """
+    # Create CARLA rotation matrix
+    carla_rotation = Rotation.from_euler('xyz', [np.radians(roll), np.radians(pitch), np.radians(yaw)])
+    carla_matrix = carla_rotation.as_matrix()
+    
+    # CARLA to NuScenes coordinate transformation matrix
+    # CARLA: X-forward, Y-right, Z-up → NuScenes: X-forward, Y-left, Z-up
+    transform_matrix = np.array([
+        [1,  0,  0],
+        [0,  -1,  0],
+        [0,  0,  1]
+    ])
+    
+    # Apply coordinate transformation: T * R_carla * T^(-1)
+    # Since T is its own inverse: T * R_carla * T
+    nuscenes_matrix = transform_matrix @ carla_matrix @ transform_matrix
+    
+    # Convert back to quaternion
+    nuscenes_rotation = Rotation.from_matrix(nuscenes_matrix)
+    quaternion = nuscenes_rotation.as_quat()
+    
+    # NuScenes quaternion order is [w, x, y, z]
+    # Scipy's as_quat() returns [x, y, z, w]
+    return [quaternion[3], quaternion[0], quaternion[1], quaternion[2]]
+
+def carla_camera_rotation_to_nuscenes_quaternion(roll: float, pitch: float, yaw: float) -> List[float]:
+    """Convert CARLA camera rotation to NuScenes camera quaternion.
+    
+    For cameras, we need special handling because NuScenes camera coordinate system
+    has Z pointing forward into the scene, while CARLA uses the standard coordinate system.
+
+    Args:
+        roll: CARLA rotation around the X-axis in degrees.
+        pitch: CARLA rotation around the Y-axis in degrees.
+        yaw: CARLA rotation around the Z-axis in degrees.
+
+    Returns:
+        A list representing the NuScenes Camera Quaternion [w, x, y, z].
+    """
+    # Convert CARLA Euler angles to rotation matrix
+    carla_rotation = Rotation.from_euler('xyz', [np.radians(roll), np.radians(pitch), np.radians(yaw)])
+    carla_matrix = carla_rotation.as_matrix()
+    
+    # CARLA to NuScenes camera coordinate transformation
+    carla_to_camera = np.array([
+        [0,  0,  1],  
+        [0,  1,  0],  
+        [-1,  0,  0]   
+    ])
+    
+    # Apply the coordinate transformation to the CARLA rotation matrix
+    nuscenes_camera_matrix = carla_to_camera @ carla_matrix @ carla_to_camera.T
+    
+    # Convert back to quaternion
+    nuscenes_rotation = Rotation.from_matrix(nuscenes_camera_matrix)
+    quaternion = nuscenes_rotation.as_quat()
+    
+    # NuScenes quaternion order is [w, x, y, z]
+    # Scipy's as_quat() returns [x, y, z, w]
+    return [quaternion[3], quaternion[0], quaternion[1], quaternion[2]]
+
+def euler_to_quaternion(roll: float, pitch: float, yaw: float) -> List[float]:
+    """Convert Euler angles (roll, pitch, yaw) to a Quaternion (w, x, y, z).
+    
+    This is the old function kept for backward compatibility.
+    Use carla_rotation_to_nuscenes_quaternion for CARLA→NuScenes conversion.
     """
     # CARLA uses degrees, scipy expects radians
     quaternion = Rotation.from_euler('xyz', [np.radians(roll), np.radians(pitch), np.radians(yaw)]).as_quat()

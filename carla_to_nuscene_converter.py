@@ -108,6 +108,10 @@ class NuScenesConverter:
         
         # Initialize attribute name to token mapping
         self.attribute_name_to_token = {}
+        
+        # Debug flags for coordinate transformations
+        self._debug_calibrations = False  # Set to True to enable debug output
+        self._debug_annotations = False  # Disable debug output for cleaner conversion
 
     def _load_config(self, config_path: str) -> dict:
         """Load and validate the converter configuration."""
@@ -319,7 +323,8 @@ class NuScenesConverter:
         Returns:
             A list representing the Quaternion [w, x, y, z].
         """
-        return euler_to_quaternion(roll, pitch, yaw)
+        from nuscene_utils import carla_rotation_to_nuscenes_quaternion
+        return carla_rotation_to_nuscenes_quaternion(roll, pitch, yaw)
 
     def _convert_bounding_box_size(self, extent) -> List[float]:
         """Convert CARLA bounding box extent to NuScenes size.

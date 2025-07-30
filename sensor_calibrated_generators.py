@@ -1,6 +1,6 @@
 import json
 from typing import List, Dict
-from nuscene_utils import generate_token, euler_to_quaternion
+from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, carla_camera_rotation_to_nuscenes_quaternion
 
 class SensorCalibratedGenerators:
     def __init__(self, converter):
@@ -50,22 +50,24 @@ class SensorCalibratedGenerators:
                     continue
                 loc = sensor["transform"]["location"]
                 rot = sensor["transform"]["rotation"]
-                # Convert CARLA coordinates (X-forward, Y-right, Z-up) to NuScenes (X-forward, Y-left, Z-up)
-                # Negate the Y-coordinate for translation
-                translation = [float(loc["x"]), -float(loc["y"]), float(loc["z"])]
-
-                # Get CARLA Euler angles (degrees)
+                
+                # Get CARLA Euler angles (degrees) 
                 roll_carla = float(rot.get("roll", 0.0))
                 pitch_carla = float(rot.get("pitch", 0.0))
                 yaw_carla = float(rot.get("yaw", 0.0))
 
-                # Convert CARLA Euler angles to NuScenes Euler angles (degrees)
-                # Negate roll and pitch due to the flipped Y-axis
-                roll_nusc = -roll_carla
-                pitch_nusc = -pitch_carla
-                yaw_nusc = yaw_carla
-
-                rotation_quaternion = euler_to_quaternion(roll_nusc, pitch_nusc, yaw_nusc)
+                # Use standard coordinate transformation for all sensors
+                # CARLA: X-forward, Y-right, Z-up → NuScenes: X-forward, Y-left, Z-up
+                translation = [float(loc["x"]), -float(loc["y"]), float(loc["z"])]
+                
+                # Use appropriate coordinate transformation for each sensor type
+                # Camera calibrations need camera-specific coordinates for proper projection
+                if sensor_type == "camera":
+                    # FIX: Use standard coordinate transformation for cameras too
+                    # to maintain consistency with annotations and other sensors
+                    rotation_quaternion = carla_rotation_to_nuscenes_quaternion(roll_carla, pitch_carla, yaw_carla)
+                else:
+                    rotation_quaternion = carla_rotation_to_nuscenes_quaternion(roll_carla, pitch_carla, yaw_carla)
 
                 calibrated_sensor_entry = {
                     "token": generate_token(),

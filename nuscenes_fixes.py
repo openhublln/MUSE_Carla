@@ -159,18 +159,12 @@ class NuScenesFixes:
                 target_file = target_path / f"{timestamp}.bin"
                 # Load and convert NPY to BIN
                 points = np.load(npy_file)
-                # Apply sensor-to-ego transformation if calibration is available
-                if calib is not None:
-                    t = np.array(calib['translation'])
-                    q = calib['rotation']  # [w, x, y, z]
-                    print(f"Applying LIDAR calibration: translation={t}, rotation={q} to {npy_file.name}")
-                    r = Rotation.from_quat([q[1], q[2], q[3], q[0]])
-                    points_xyz = points[:, :3]
-                    points_xyz = r.apply(points_xyz) + t
-                    points[:, :3] = points_xyz
-                else:
-                    print(f"NO LIDAR CALIBRATION FOUND for {npy_file.name} -- points will NOT be transformed!")
-                # Mirror flip along Y axis to match annotation referential
+                # Skip sensor-to-ego transformation for LIDAR to match annotation coordinate system
+                # Annotations are in global coordinates, LIDAR should be too (before sensor transforms)
+                # Only apply CARLA->NuScenes coordinate conversion (Y-axis flip)
+                print(f"Keeping LIDAR points in global coordinate system for {npy_file.name} (no sensor transform applied)")
+                
+                # Apply only CARLA->NuScenes coordinate conversion (Y-axis flip)
                 points[:, 1] *= -1
                 # Ensure 5-column format (x, y, z, intensity, ring_index)
                 if points.shape[1] < 5:
@@ -337,14 +331,34 @@ class NuScenesFixes:
                     'image_size_y': image_size_y,
                     'fov': fov
                 }
-        # Map sensor_token to channel and name
+        # Map sensor_token to channel, name, and modality
         sensor_token_to_channel = {s['token']: s['channel'] for s in sensors}
-        sensor_token_to_name = {s['token']: s.get('channel', s.get('name', '')) for s in sensors}
-        # For each camera calibrated sensor, compute and set the intrinsic matrix
+        sensor_token_to_modality = {s['token']: s['modality'] for s in sensors}
+        
+        # First, clean up any unwanted fields and ensure proper initialization
+        for calibrated_sensor in calibrated_sensors:
+            sensor_token = calibrated_sensor.get('sensor_token')
+            modality = sensor_token_to_modality.get(sensor_token, '')
+            
+            # Remove unwanted camera_frame_correction field (not part of official NuScenes format)
+            if 'camera_frame_correction' in calibrated_sensor:
+                del calibrated_sensor['camera_frame_correction']
+            
+            # Ensure non-camera sensors have empty camera_intrinsic
+            if modality != 'camera':
+                calibrated_sensor['camera_intrinsic'] = []
+        
+        # For each CAMERA calibrated sensor, compute and set the intrinsic matrix
         fixed_count = 0
         for calibrated_sensor in calibrated_sensors:
             sensor_token = calibrated_sensor.get('sensor_token')
             channel = sensor_token_to_channel.get(sensor_token, '')
+            modality = sensor_token_to_modality.get(sensor_token, '')
+            
+            # Only process camera sensors
+            if modality != 'camera':
+                continue
+                
             # Map nuScenes channel to config name
             # e.g. CAM_FRONT -> Camera_Front
             config_name = None
@@ -363,7 +377,8 @@ class NuScenesFixes:
                 w = params['image_size_x']
                 h = params['image_size_y']
                 fov = params['fov']
-                fx = fy = w / (2 * np.tan(np.deg2rad(fov) / 2))
+                fx = w / (2 * np.tan(np.deg2rad(fov) / 2))
+                fy = h / (2 * np.tan(np.deg2rad(fov) / 2))
                 cx = w / 2
                 cy = h / 2
                 intrinsic = [
@@ -372,17 +387,7 @@ class NuScenesFixes:
                     [0.0, 0.0, 1.0]
                 ]
                 calibrated_sensor['camera_intrinsic'] = intrinsic
-                
-                # Add camera frame correction matrix
-                # Convert from CARLA camera frame (X-forward, Y-right, Z-up) 
-                # to pinhole camera frame (Z-forward, X-right, Y-down)
-                camera_frame_correction = [
-                    [0.0, 1.0, 0.0],
-                    [0.0, 0.0, -1.0],
-                    [1.0, 0.0, 0.0]
-                ]
-                calibrated_sensor['camera_frame_correction'] = camera_frame_correction
-                
+                print(f"  Set camera intrinsics for {channel}: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
                 fixed_count += 1
         with open(calibrated_file, 'w') as f:
             json.dump(calibrated_sensors, f, indent=2)

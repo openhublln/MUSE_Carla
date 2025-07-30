@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from nuscene_utils import generate_token, euler_to_quaternion, adjust_z_for_ego_pose
+from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, adjust_z_for_ego_pose
 from PIL import Image
 import shutil
 import numpy as np
@@ -21,27 +21,29 @@ class SampleDataGenerator:
                     with open(pose_file, 'r') as f:
                         pose_data = json.load(f)
                         
+                    # Convert CARLA coordinates to NuScenes coordinate system
+                    # CARLA: X-forward, Y-right, Z-up
+                    # NuScenes: X-forward, Y-left, Z-up (negate Y)
                     translation = [
                         float(pose_data["translation"]["x"]),
-                        float(pose_data["translation"]["y"]),
+                        -float(pose_data["translation"]["y"]),  # Negate Y for coordinate system conversion
                         float(pose_data["translation"]["z"])
                     ]
                     
-                    # Convert CARLA Euler angles to NuScenes quaternion
-                    rotation = euler_to_quaternion(
-                        float(pose_data["rotation"]["roll"]),
-                        float(pose_data["rotation"]["pitch"]),
-                        float(pose_data["rotation"]["yaw"])
-                    )
+                    # Convert CARLA rotation to NuScenes using proper coordinate transformation
+                    roll = float(pose_data["rotation"]["roll"])
+                    pitch = float(pose_data["rotation"]["pitch"]) 
+                    yaw = float(pose_data["rotation"]["yaw"])
                     
-                    # In nuScenes, ego pose is always at [0,0,0] in ego coordinates
-                    # Store the world coordinates for transformation purposes
+                    rotation = carla_rotation_to_nuscenes_quaternion(roll, pitch, yaw)
+                    
+                    # Use actual world coordinates for ego pose (not hardcoded origin)
                     token = generate_token()
                     ego_pose_entry = {
                         "token": token,
                         "timestamp": timestamp,
-                        "translation": [0.0, 0.0, 0.0],  # Ego is always at origin in ego frame
-                        "rotation": [1.0, 0.0, 0.0, 0.0]  # No rotation in ego frame
+                        "translation": translation,  # Use actual world position
+                        "rotation": rotation  # Use actual world orientation
                     }
                     
                     self.converter.ego_poses.append(ego_pose_entry)

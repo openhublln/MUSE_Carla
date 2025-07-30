@@ -2,12 +2,15 @@ import json
 import numpy as np
 from typing import List, Dict
 # Assuming nuscene_utils and carla types are available or passed through self.converter
-from nuscene_utils import generate_token, euler_to_quaternion, count_points_in_box, transform_points_to_global, transform_radar_points_to_global, transform_box_to_ego_frame
+from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, carla_camera_rotation_to_nuscenes_quaternion, count_points_in_box, transform_points_to_global, transform_radar_points_to_global, transform_box_to_ego_frame
 import carla # For carla.Transform type hint if needed directly
 
 class AnnotationGenerator:
     def __init__(self, converter):
         self.converter = converter
+        # OPTION: Set to True to test camera-specific coordinate transformations for annotations
+        # This is an alternative fix if the primary fix in sensor_calibrated_generators.py doesn't work
+        self.use_camera_specific_coordinates = False  # BACK TO BASICS: Use general coordinates
 
     def _infer_vehicle_state(self, velocity_magnitude: float) -> str:
         MOVING_THRESHOLD = 0.5
@@ -126,73 +129,48 @@ class AnnotationGenerator:
                         translation_data = pose.get("translation", {})
                         rotation_data = pose.get("rotation", {})
                         
-                        quaternion = euler_to_quaternion(
-                            float(rotation_data.get("roll", 0)),
-                            float(rotation_data.get("pitch", 0)),
-                            float(rotation_data.get("yaw", 0))
-                        )
+                        # Apply CARLA to NuScenes coordinate system conversion
+                        # CARLA: X-forward, Y-right, Z-up → NuScenes: X-forward, Y-left, Z-up
+                        box_center = [
+                            float(translation_data.get("x", 0)),
+                            -float(translation_data.get("y", 0)),  # Negate Y for coordinate conversion
+                            float(translation_data.get("z", 0))
+                        ]
+                        
+                        # Convert CARLA rotation to NuScenes quaternion
+                        # Keep original approach that worked for LiDAR visualization
+                        raw_roll = float(rotation_data.get("roll", 0))
+                        raw_pitch = float(rotation_data.get("pitch", 0))
+                        raw_yaw = float(rotation_data.get("yaw", 0))
+                        
+                        # Use standard rotation conversion (global coordinates for annotations)
+                        quaternion = carla_rotation_to_nuscenes_quaternion(raw_roll, raw_pitch, raw_yaw)
                         
                         velocity = annotation_data.get("velocity", {})
                         velocity_magnitude = velocity.get("magnitude", 0.0)
                         vehicle_state = self._infer_vehicle_state(velocity_magnitude)
                         attribute_token = self.converter.attribute_name_to_token.get(vehicle_state, "")
                         
-                        box_center = [
-                            float(translation_data.get("x", 0)),
-                            float(translation_data.get("y", 0)),
-                            float(translation_data.get("z", 0))
-                        ]
+                        # Apply CARLA to NuScenes coordinate system conversion
+                        # CARLA: X-forward, Y-right, Z-up
+                        # NuScenes: X-forward, Y-left, Z-up (negate Y)
                         box_size = annotation_data.get("size", [0,0,0])
 
-                        # Get ego pose for this timestamp
-                        ego_pose = None
-                        if not hasattr(self, '_ego_pose_timestamp_map'):
-                            self._ego_pose_timestamp_map = {}
-                            for ego_pose_entry in self.converter.ego_poses:
-                                self._ego_pose_timestamp_map[ego_pose_entry["timestamp"]] = ego_pose_entry
-                        ego_pose = self._ego_pose_timestamp_map.get(timestamp)
-                        
-                        # Reconstruct world pose from the original ego_pose JSON file
-                        world_translation = [0.0, 0.0, 0.0]
-                        world_rotation = [1.0, 0.0, 0.0, 0.0]
-                        scene_path = self.converter.input_base / scene_folder
-                        ego_pose_file = scene_path / self.converter.EGO_POSE_FOLDER / f"{timestamp}.json"
-                        if ego_pose_file.exists():
-                            try:
-                                with open(ego_pose_file, 'r') as f:
-                                    pose_data = json.load(f)
-                                world_translation = [
-                                    float(pose_data["translation"]["x"]),
-                                    float(pose_data["translation"]["y"]),
-                                    float(pose_data["translation"]["z"])
-                                ]
-                                world_rotation = euler_to_quaternion(
-                                    float(pose_data["rotation"]["roll"]),
-                                    float(pose_data["rotation"]["pitch"]),
-                                    float(pose_data["rotation"]["yaw"])
-                                )
-                            except Exception as e:
-                                print(f"Warning: Could not load world pose for annotation transformation: {e}")
-                        else:
-                            print(f"Warning: Ego pose file not found for timestamp {timestamp}")
-                        # Transform box center and rotation to ego frame
-                        box_center, quaternion = transform_box_to_ego_frame(
-                            box_center, quaternion,
-                            world_translation, world_rotation
-                        )
+                        # NOTE: Quaternion already calculated above with yaw correction applied
+                        # No need to recalculate - this was overwriting the corrected quaternion!
                         
                         num_lidar_pts = 0
-                        # Assuming Lidar data is in a folder named as per sim_config sensor name
-                        # This part relies on self.converter._get_sensor_transform which is in NuScenesConverter
-                        lidar_sensor_name = next((s["name"] for s in self.converter.sim_config.get("sensors", []) if s["type"] == "lidar"), "Lidar") # Default or find
+                        # Count LIDAR points in the annotation box (both in same global coordinate system)
+                        lidar_sensor_name = next((s["name"] for s in self.converter.sim_config.get("sensors", []) if s["type"] == "lidar"), "Lidar")
                         lidar_file = scene_path / lidar_sensor_name / f"{timestamp}.npy"
                         if lidar_file.exists():
                             try:
-                                lidar_points = np.load(lidar_file)
-                                sensor_transform_rel, ego_transform_abs = self.converter._get_sensor_transform(scene_folder, lidar_sensor_name, timestamp)
-                                if sensor_transform_rel and ego_transform_abs:
-                                    global_points = transform_points_to_global(lidar_points, sensor_transform_rel, ego_transform_abs)
-                                    num_lidar_pts = count_points_in_box(global_points, box_center, box_size, quaternion)
+                                # Load raw LIDAR points (already in global CARLA coordinates)
+                                lidar_points_carla = np.load(lidar_file)
+                                # Apply same CARLA→NuScenes coordinate conversion as annotations
+                                lidar_points_nuscenes = lidar_points_carla.copy()
+                                lidar_points_nuscenes[:, 1] *= -1  # Negate Y coordinate
+                                num_lidar_pts = count_points_in_box(lidar_points_nuscenes, box_center, box_size, quaternion)
                             except Exception as e:
                                 print(f"Warning: Error processing lidar points for annotation: {e}")
                         
@@ -206,9 +184,13 @@ class AnnotationGenerator:
                                     radar_points = np.load(radar_file)
                                     sensor_transform_rel, ego_transform_abs = self.converter._get_sensor_transform(scene_folder, radar_name, timestamp)
                                     if sensor_transform_rel and ego_transform_abs:
-                                        global_points = transform_radar_points_to_global(radar_points, sensor_transform_rel, ego_transform_abs)
-                                        if len(global_points) > 0:
-                                            num_radar_pts += count_points_in_box(global_points, box_center, box_size, quaternion)
+                                        # Transform radar points to global CARLA coordinates
+                                        global_points_carla = transform_radar_points_to_global(radar_points, sensor_transform_rel, ego_transform_abs)
+                                        if len(global_points_carla) > 0:
+                                            # Apply same CARLA→NuScenes coordinate conversion as annotations
+                                            global_points_nuscenes = global_points_carla.copy()
+                                            global_points_nuscenes[:, 1] *= -1  # Negate Y coordinate
+                                            num_radar_pts += count_points_in_box(global_points_nuscenes, box_center, box_size, quaternion)
                                 except Exception as e:
                                     print(f"Warning: Error processing radar points for {radar_name} for annotation: {e}")
 
