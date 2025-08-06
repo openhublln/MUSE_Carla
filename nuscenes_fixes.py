@@ -441,9 +441,69 @@ class NuScenesFixes:
         with open(map_file, 'r') as f:
             maps = json.load(f)
         
-        # Update map filename to point to the correct file
+        print(f"  Current map.json content: {maps[0] if maps else 'No maps found'}")
+        
+        # First check if the current filename is already valid and not the default
+        if maps and maps[0].get('filename', 'maps/none.png') != 'maps/none.png':
+            current_filename = maps[0]['filename']
+            full_path = self.output_base / current_filename
+            if full_path.exists():
+                print(f"Map filename already correctly set: {current_filename}")
+                print(f"File exists at: {full_path}")
+                return  # Don't modify anything if it's already correct
+            else:
+                print(f"Current filename points to missing file: {full_path}")
+        
+        # Check if there's an actual map file in the maps directory
         if maps:
-            maps[0]['filename'] = 'maps/none.png'
+            maps_dir = self.output_base / 'maps'
+            print(f"  Checking maps directory: {maps_dir}")
+            print(f"  Maps directory exists: {maps_dir.exists()}")
+            
+            if maps_dir.exists():
+                all_items = list(maps_dir.iterdir())
+                print(f"  Contents of maps directory: {[item.name for item in all_items]}")
+            
+            # Look for actual map directories (not none.png)
+            actual_map_dirs = [d for d in maps_dir.iterdir() if d.is_dir()]
+            print(f"  Found {len(actual_map_dirs)} map directories: {[d.name for d in actual_map_dirs]}")
+            
+            if actual_map_dirs:
+                # Use the first actual map directory found (preserves original name)
+                map_dir = actual_map_dirs[0]
+                map_name = map_dir.name  # This will be the original CARLA map name
+                
+                # Look for the basemap file
+                basemap_files = list(map_dir.glob('*_basemap.png'))
+                if basemap_files:
+                    basemap_file = basemap_files[0]
+                    maps[0]['category'] = map_name
+                    maps[0]['filename'] = f'maps/{map_name}/{basemap_file.name}'
+                    print(f"  Updated map to use original map name: {map_name}")
+                    
+                    # Verify the file exists
+                    full_path = self.output_base / maps[0]['filename']
+                    if full_path.exists():
+                        print(f"Verified map file exists at: {full_path}")
+                    else:
+                        print(f"Warning: Map file not found at: {full_path}")
+                        maps[0]['filename'] = 'maps/none.png'
+                        print("Falling back to default map")
+                else:
+                    maps[0]['filename'] = 'maps/none.png'
+                    print("  No basemap file found, using fallback")
+            else:
+                # Check if current filename is already correct (from _setup_map_files)
+                current_filename = maps[0].get('filename', 'maps/none.png')
+                if current_filename != 'maps/none.png':
+                    # Verify the current filename points to an existing file
+                    full_path = self.output_base / current_filename
+                    if full_path.exists():
+                        print(f"Current map filename is valid: {current_filename}")
+                        return  # Don't change anything if current path is valid
+                
+                maps[0]['filename'] = 'maps/none.png'
+                print("  No actual map directories found, using fallback")
         
         with open(map_file, 'w') as f:
             json.dump(maps, f, indent=2)

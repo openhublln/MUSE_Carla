@@ -568,14 +568,190 @@ class NuScenesConverter:
             
         print(f"Writing {table_name}.json to {output_path}")
 
+    def _setup_map_files(self):
+        """
+        Finds generated map files in the '_out' directory, copies them to the correct
+        'nuscenes_format/maps' structure, and updates the internal map record.
+        """
+        source_map_dir = self.input_base
+        dest_maps_dir = self.output_base / 'maps'
+
+        # Set default values for the map record.
+        map_category = 'none'
+        map_filename = 'maps/none.png'
+
+        try:
+            # List all files in _out for debugging
+            all_files = list(source_map_dir.glob('*'))
+            
+            # Find the map metadata JSON file in the source directory.
+            source_map_json_files = [f for f in source_map_dir.glob('*.json') if f.stem not in ['log_info', 'config']]
+            
+            if not source_map_json_files:
+                print("Warning: No map metadata .json found in '_out/'.")
+                raise FileNotFoundError("No map JSON found")
+
+            source_json_path = source_map_json_files[0]
+            
+            with open(source_json_path, 'r') as f:
+                map_meta = json.load(f)
+            
+            # Use the original map name to preserve the CARLA map identity
+            original_map_name = map_meta.get('original_carla_map', source_json_path.stem)
+            mask_filename_stem = map_meta.get('basemap', {}).get('filename', f"{original_map_name}_basemap.png")
+            source_mask_path = source_map_dir / mask_filename_stem
+            
+            if not source_mask_path.exists():
+                print(f"Warning: Found map metadata at {source_json_path} but mask '{mask_filename_stem}' is missing in '_out/'.")
+                raise FileNotFoundError(f"Map mask {mask_filename_stem} not found")
+
+            # Define destination paths using original map name
+            dest_json_path = dest_maps_dir / f"{original_map_name}.json"
+            dest_map_sub_dir = dest_maps_dir / original_map_name
+            # Keep original filename structure
+            dest_mask_path = dest_map_sub_dir / f"{original_map_name}_basemap.png"
+            dest_map_sub_dir.mkdir(parents=True, exist_ok=True)
+
+            # Copy files and update map record variables
+            shutil.copy(source_mask_path, dest_mask_path)
+            shutil.copy(source_json_path, dest_json_path)
+            
+            # Create minimal vector map for NuScenesMap API compatibility
+            self._create_minimal_vector_map(dest_map_sub_dir, original_map_name, map_meta)
+            
+            map_category = original_map_name
+            map_filename = f'maps/{original_map_name}/{original_map_name}_basemap.png'
+
+        except (FileNotFoundError, Exception) as e:
+            if isinstance(e, FileNotFoundError):
+                pass # Warning already printed
+            else:
+                print(f"An error occurred during map file setup: {e}")
+            print("Falling back to default 'none' map.")
+            
+            # Ensure the fallback 'none.png' exists
+            mask_file = dest_maps_dir / 'none.png'
+            if not mask_file.exists():
+                from PIL import Image
+                img = Image.new('RGB', (100, 100), color=(200, 200, 200))
+                img.save(mask_file)
+                print(f"Created minimal fallback map mask at {mask_file}")
+        
+        # Finally, update the map record in self.maps
+        if self.maps:
+            print(f"Before update: category='{self.maps[0]['category']}', filename='{self.maps[0]['filename']}'")
+            print(f"Will update to: category='{map_category}', filename='{map_filename}'")
+            self.maps[0]['category'] = map_category
+            self.maps[0]['filename'] = map_filename
+            print(f"After update: category='{self.maps[0]['category']}', filename='{self.maps[0]['filename']}'")
+            
+            # Verify the file actually exists at the expected location
+            expected_file_path = self.output_base / map_filename
+            if expected_file_path.exists():
+                print(f"Map file created successfully at: {expected_file_path}")
+            else:
+                print(f"Warning: Map file not found at expected location: {expected_file_path}")
+                # If file doesn't exist, fall back to default
+                map_filename = 'maps/none.png'
+                map_category = 'none'
+                print(f"Falling back to: {map_filename}")
+                # Update the map record with fallback values
+                self.maps[0]['category'] = map_category
+                self.maps[0]['filename'] = map_filename
+        else:
+            print("Warning: No map records found to update!")
+
+    def _create_minimal_vector_map(self, map_dir, map_name, map_meta):
+        """Create minimal vector map files for NuScenesMap compatibility."""
+        try:
+            # Create basic map structure for NuScenesMap
+            basemap_meta = {
+                "origin": map_meta.get("origin", [0.0, 0.0]),
+                "scale": map_meta.get("scale", 0.1),
+                "rotation": map_meta.get("rotation", 0.0),
+                "filename": f"{map_name}_basemap.png"  # Use the actual filename, not the original
+            }
+            
+            # Write basemap metadata
+            basemap_json_path = map_dir / f"{map_name}_basemap.json"
+            with open(basemap_json_path, 'w') as f:
+                json.dump(basemap_meta, f, indent=2)
+            
+            # Create minimal vector map files that nuScenes expects for proper map rendering
+            # This is what enables underlay_map=True to work with custom maps
+            
+            # 1. Create main map metadata file
+            map_meta_path = map_dir / f"{map_name}.json"
+            main_map_meta = {
+                "map_name": map_name,
+                "layer_names": ["drivable_area", "lane", "ped_crossing", "walkway", "stop_line"],
+                "meta": {
+                    "coordinate_system": "local_meters",
+                    "uses_canvas": True,
+                    "canvas_edge": 50.0,
+                }
+            }
+            with open(map_meta_path, 'w') as f:
+                json.dump(main_map_meta, f, indent=2)
+            
+            # 2. Create empty vector layer files (required for NuScenesMap API)
+            vector_layers = {
+                "drivable_area": {"type": "MultiPolygon", "coordinates": []},
+                "lane": {"type": "MultiLineString", "coordinates": []},
+                "ped_crossing": {"type": "MultiPolygon", "coordinates": []},
+                "walkway": {"type": "MultiPolygon", "coordinates": []},
+                "stop_line": {"type": "MultiLineString", "coordinates": []}
+            }
+            
+            for layer_name, geom_data in vector_layers.items():
+                layer_path = map_dir / f"{map_name}_{layer_name}.json"
+                with open(layer_path, 'w') as f:
+                    json.dump(geom_data, f, indent=2)
+            
+            # 3. Create expansion metadata (for map bounds) in the correct directory structure
+            # nuScenes expects expansion files in maps/expansion/ directory
+            expansion_dir = self.output_base / 'maps' / 'expansion'
+            expansion_dir.mkdir(parents=True, exist_ok=True)
+            expansion_path = expansion_dir / f"{map_name}.json"
+            
+            bounds = [
+                map_meta.get("origin", [0.0, 0.0])[0],  # min_x
+                map_meta.get("origin", [0.0, 0.0])[1] - (basemap_meta.get("size", [1024, 1024])[1] * basemap_meta["scale"]),  # min_y  
+                map_meta.get("origin", [0.0, 0.0])[0] + (basemap_meta.get("size", [1024, 1024])[0] * basemap_meta["scale"]),  # max_x
+                map_meta.get("origin", [0.0, 0.0])[1]   # max_y
+            ]
+            expansion_meta = {
+                "node_dict": {},
+                "way_dict": {},
+                "bounds": bounds
+            }
+            with open(expansion_path, 'w') as f:
+                json.dump(expansion_meta, f, indent=2)
+                
+            print(f"Created complete vector map files for {map_name} (enables underlay_map=True)")
+            
+        except Exception as e:
+            print(f"Warning: Failed to create vector map files: {e}")
+
     def _write_all_tables(self):
         """Write all NuScenes tables to their respective JSON files."""
-        # First, ensure all logs have a map token
-        map_token = self.maps[0]['token']
+        # Link logs to map (map.log_tokens should contain log tokens)
         for log in self.logs:
-            log['map_token'] = map_token
             self.maps[0]['log_tokens'].append(log['token'])
 
+        # Create required directories
+        version_dir = self.output_base / self.version
+        samples_dir = self.output_base / 'samples'
+        sweeps_dir = self.output_base / 'sweeps'
+        maps_dir = self.output_base / 'maps'
+        
+        for directory in [version_dir, samples_dir, sweeps_dir, maps_dir]:
+            directory.mkdir(parents=True, exist_ok=True)
+
+        # --- Setup map files and update map record ---
+        self._setup_map_files()
+
+        # Create tables dictionary AFTER map setup to capture updated map record
         tables = {
             'attribute': self.attributes,
             'category': self.categories,
@@ -591,28 +767,6 @@ class NuScenesConverter:
             'sensor': self.sensors,
             'calibrated_sensor': self.calibrated_sensors
         }
-
-        # Create required directories
-        version_dir = self.output_base / self.version
-        samples_dir = self.output_base / 'samples'
-        sweeps_dir = self.output_base / 'sweeps'
-        maps_dir = self.output_base / 'maps'
-        
-        for directory in [version_dir, samples_dir, sweeps_dir, maps_dir]:
-            directory.mkdir(parents=True, exist_ok=True)
-
-        # Create a minimal valid map mask file
-        map_mask_path = self.output_base / 'maps' / 'none.png'
-        if not map_mask_path.exists():
-            # Create a 1x1 black PNG file as a minimal valid map mask
-            from PIL import Image
-            img = Image.new('RGB', (1, 1), color='black')
-            img.save(map_mask_path)
-            print(f"Created minimal map mask file at {map_mask_path}")
-
-        # Update map entry to point to the correct file
-        if self.maps:
-            self.maps[0]['filename'] = 'maps/none.png'
 
         # Validate required tables
         required_tables = [

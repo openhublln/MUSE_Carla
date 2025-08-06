@@ -4,6 +4,9 @@ import time
 import yaml
 import carla
 import json
+import subprocess
+import sys
+import glob
 from queue import Queue, Empty
 from bounding_box_export import export_3d_bboxes
 from traffic_setup import setup_traffic, spawn_ego_vehicle
@@ -34,6 +37,79 @@ def save_ego_pose(ego_vehicle, timestamp, ego_pose_dir):
     pose_path = os.path.join(ego_pose_dir, f"{timestamp}.json")
     with open(pose_path, 'w') as f:
         json.dump(pose, f, indent=2)
+
+def generate_map_mask(base_save_path):
+    """Generate map mask using the external generate_map_mask.py script.
+    
+    Args:
+        base_save_path: Directory where the map mask will be saved
+        
+    Returns:
+        bool: True if map generation was successful, False otherwise
+    """
+    print("\n" + "="*60)
+    print("GENERATING MAP MASK BEFORE SENSOR DATA COLLECTION")
+    print("="*60)
+    
+    try:
+        # Check if generate_map_mask.py exists
+        if not os.path.exists('generate_map_mask.py'):
+            print("generate_map_mask.py not found in current directory")
+            return False
+        
+        # Run the map mask generation script
+        cmd = [
+            sys.executable,  # Use the same Python interpreter
+            'generate_map_mask.py',
+            '--output', base_save_path,
+            '--resolution', 'medium',  # Use medium resolution for good quality
+            '--altitude', '400.0',
+            '--target-resolution', '0.1'
+        ]
+        
+        print(f"Running command: {' '.join(cmd)}")
+        print("This may take a few minutes depending on map size...")
+        
+        # Run the script and wait for completion with timeout
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,  # 10 minute timeout
+            cwd=os.getcwd()  # Run in current directory
+        )
+        
+        if result.returncode == 0:
+            print("Map mask generation completed successfully!")
+            
+            # Verify that map files were actually created
+            expected_files = []
+            for ext in ['.png', '.json']:
+                pattern = os.path.join(base_save_path, f"*{ext}")
+                files = glob.glob(pattern)
+                expected_files.extend(files)
+            
+            if expected_files:
+                print(f"Created map files: {[os.path.basename(f) for f in expected_files]}")
+                return True
+            else:
+                print("Warning: Map generation reported success but no map files found")
+                return False
+        else:
+            print("Map mask generation failed!")
+            print("STDERR:", result.stderr)
+            if result.stdout:
+                print("STDOUT:", result.stdout)
+            return False
+            
+    except subprocess.TimeoutExpired:
+        print("Map mask generation timed out after 10 minutes")
+        return False
+    except Exception as e:
+        print(f"Error running map mask generation: {e}")
+        return False
+    finally:
+        print("="*60)
 
 def collect_log_info(world, ego_vehicle, base_save_path):
     """Collects and saves simulation log info for NuScenes log.json generation."""
@@ -84,6 +160,20 @@ def main():
         settings.synchronous_mode = True
         settings.fixed_delta_seconds = 0.05  # 20Hz simulation
         world.apply_settings(settings)
+
+        # Generate map mask BEFORE starting simulation
+        print(f"Generating map mask for {world.get_map().name}...")
+        
+        # Ensure the output directory exists
+        os.makedirs(base_save_path, exist_ok=True)
+        
+        map_generation_success = generate_map_mask(base_save_path)
+        
+        if map_generation_success:
+            print("Map mask generation completed. Proceeding with sensor data collection.")
+        else:
+            print("Map mask generation failed, but continuing with sensor data collection.")
+            print("You can run generate_map_mask.py manually later if needed.")
 
         # Setup traffic before starting sensor collection
         print("Setting up traffic...")
