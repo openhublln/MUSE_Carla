@@ -4,6 +4,51 @@ import numpy as np
 import carla 
 from shapely.geometry import Polygon, box
 
+# --- Simple in-file selector for which categories to export ---
+# Supported categories: vehicle.car, vehicle.truck, vehicle.bus, vehicle.motorcycle, vehicle.bicycle, human.pedestrian
+EXPORT_BBOX3D_CATEGORIES = {
+    "vehicle.car",
+    "vehicle.truck",
+    "vehicle.bus",
+    "vehicle.motorcycle",
+    "vehicle.bicycle",
+    "human.pedestrian",
+}
+
+# Distance and size thresholds
+MAX_DISTANCE_METERS = 50.0
+MIN_BOX_PX = 3
+
+# --- Actor category classification ---
+def classify_actor_category(actor: carla.Actor) -> str:
+    """Classify a CARLA actor into a simple category string compatible with NuScenes-style labels.
+
+    Returns one of: vehicle.car, vehicle.truck, vehicle.bus, vehicle.motorcycle, vehicle.bicycle, human.pedestrian
+    Returns None if category cannot be determined.
+    """
+    try:
+        type_id = getattr(actor, 'type_id', '') or ''
+    except Exception:
+        type_id = ''
+
+    if type_id.startswith('vehicle.'):
+        lower_id = type_id.lower()
+        if 'truck' in lower_id:
+            return 'vehicle.truck'
+        if 'bus' in lower_id:
+            return 'vehicle.bus'
+        if 'motorcycle' in lower_id or 'harley' in lower_id or 'yamaha' in lower_id:
+            return 'vehicle.motorcycle'
+        if 'bicycle' in lower_id or '.bike' in lower_id or 'crossbike' in lower_id:
+            return 'vehicle.bicycle'
+        # Default vehicle type
+        return 'vehicle.car'
+
+    if type_id.startswith('walker.pedestrian'):
+        return 'human.pedestrian'
+
+    return None
+
 # --- Liang-Barsky Line Clipping Algorithm ---
 def liang_barsky_clip(x1, y1, x2, y2, x_min, y_min, x_max, y_max):
     """Clips a line segment to a rectangular window."""
@@ -182,17 +227,23 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
 
     output_data = []
 
-    # Process ONLY Dynamic Vehicles accessible via get_actors()
-    vehicles = world.get_actors().filter('*vehicle*')
-    for actor in vehicles:
+    # Process selected dynamic actors: vehicles and pedestrians
+    vehicles = world.get_actors().filter('vehicle.*')
+    walkers = world.get_actors().filter('walker.pedestrian.*')
+    actors = list(vehicles) + list(walkers)
+    for actor in actors:
         if actor.id == ego_vehicle.id:
+            continue
+
+        category = classify_actor_category(actor)
+        if category is None or category not in EXPORT_BBOX3D_CATEGORIES:
             continue
 
         actor_transform = actor.get_transform()
         actor_loc = actor_transform.location
 
         # --- Basic Filters ---
-        if actor_loc.distance(ego_location) > 50:
+        if actor_loc.distance(ego_location) > MAX_DISTANCE_METERS:
             continue
         ray = actor_loc - sensor_loc
         if forward.dot(ray) < 1:
@@ -243,7 +294,7 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
             w = max(0.0, x_max - x_min)
             h = max(0.0, y_max - y_min)
             bbox_from_clipped = [x_min, y_min, w, h]
-            if w < 3 or h < 3: # Tiny box filter
+            if w < MIN_BOX_PX or h < MIN_BOX_PX: # Tiny box filter
                  continue
 
         # --- Get Velocity ---
@@ -269,7 +320,8 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
         # --- Store Data ---
         output_data.append({
             "actor_id": actor.id,
-            "type": "vehicle", 
+            "type": "vehicle" if category.startswith('vehicle.') else "pedestrian", 
+            "category": category,
             "clipped_segments": clipped_segments_for_actor,
             "bbox_from_clipped": bbox_from_clipped,
             "velocity": {

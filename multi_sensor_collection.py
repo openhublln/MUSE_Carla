@@ -161,19 +161,8 @@ def main():
         settings.fixed_delta_seconds = 0.05  # 20Hz simulation
         world.apply_settings(settings)
 
-        # Generate map mask BEFORE starting simulation
-        print(f"Generating map mask for {world.get_map().name}...")
-        
         # Ensure the output directory exists
         os.makedirs(base_save_path, exist_ok=True)
-        
-        map_generation_success = generate_map_mask(base_save_path)
-        
-        if map_generation_success:
-            print("Map mask generation completed. Proceeding with sensor data collection.")
-        else:
-            print("Map mask generation failed, but continuing with sensor data collection.")
-            print("You can run generate_map_mask.py manually later if needed.")
 
         # Setup traffic before starting sensor collection
         print("Setting up traffic...")
@@ -347,10 +336,27 @@ def main():
         print(f"Erreur lors de l'initialisation: {e}")
 
     finally:
-        # Clean up traffic
+        # Clean up traffic first
         print('\nDestroying traffic...')
-        client.apply_batch([carla.command.DestroyActor(x) for x in vehicle_list])
+        try:
+            client.apply_batch([carla.command.DestroyActor(x) for x in vehicle_list])
+        except Exception as e:
+            print(f"Warning: Failed to destroy some traffic actors: {e}")
         time.sleep(0.5)
+
+        # Generate map mask AFTER simulation and traffic cleanup
+        try:
+            if 'base_save_path' in locals() and isinstance(base_save_path, str) and len(base_save_path) > 0:
+                print(f"\nGenerating map mask after simulation for {client.get_world().get_map().name}...")
+                map_generation_success = generate_map_mask(base_save_path)
+                if map_generation_success:
+                    print("Map mask generation completed successfully at end of pipeline.")
+                else:
+                    print("Map mask generation failed at end of pipeline. You can run generate_map_mask.py manually later.")
+            else:
+                print("Skipping map mask generation: base_save_path unavailable.")
+        except Exception as e:
+            print(f"Error generating map mask at end of pipeline: {e}")
 
 if __name__ == "__main__":
     main()

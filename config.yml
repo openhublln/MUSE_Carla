@@ -3,8 +3,8 @@ simulation:
   seconds_per_scene: 2
   base_save_path: ./_out
   traffic:
-    num_vehicles: 30
-    num_pedestrians: 10
+    num_vehicles: 50
+    num_pedestrians: 15
     safe_spawn: true
     car_lights_on: true
     seed: null

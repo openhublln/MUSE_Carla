@@ -7,8 +7,62 @@ def setup_traffic(client, world, traffic_config):
     try:
         # Get blueprints for vehicles and pedestrians
         blueprints = world.get_blueprint_library().filter('vehicle.*')
-        if traffic_config.get("safe_spawn", True):
-            blueprints = [x for x in blueprints if x.get_attribute('base_type') == 'car']
+
+        # --- Build category-specific blueprint pools with robust base_type detection ---
+        def get_base_type(bp):
+            # Prefer explicit attribute when available
+            try:
+                if bp.has_attribute('base_type'):
+                    attr = bp.get_attribute('base_type')
+                    return attr.as_string() if hasattr(attr, 'as_string') else str(attr)
+            except Exception:
+                pass
+            # Fallback: infer from id
+            bp_id = getattr(bp, 'id', '').lower()
+            if '.truck' in bp_id: return 'truck'
+            if '.bus' in bp_id: return 'bus'
+            if '.motorcycle' in bp_id or '.bike' in bp_id: return 'motorcycle' if '.motorcycle' in bp_id else 'bicycle'
+            if '.bicycle' in bp_id: return 'bicycle'
+            if bp_id.startswith('vehicle.'): return 'car'  # default vehicle type
+            return None
+
+        cars, trucks, buses, motos, bicycles = [], [], [], [], []
+        for bp in blueprints:
+            bt = get_base_type(bp)
+            if bt == 'car':
+                cars.append(bp)
+            elif bt == 'truck':
+                trucks.append(bp)
+            elif bt == 'bus':
+                buses.append(bp)
+            elif bt == 'motorcycle':
+                motos.append(bp)
+            elif bt == 'bicycle':
+                bicycles.append(bp)
+
+        # Weighted category selection favoring cars
+        category_pools = {
+            'car': cars,
+            'truck': trucks,
+            'bus': buses,
+            'motorcycle': motos,
+            'bicycle': bicycles,
+        }
+        # Keep simple: mainly cars, some trucks/buses, few two-wheelers
+        category_weights = {
+            'car': 0.7,
+            'truck': 0.1,
+            'bus': 0.1,
+            'motorcycle': 0.05,
+            'bicycle': 0.05,
+        }
+        available_categories = [c for c, pool in category_pools.items() if len(pool) > 0]
+        if not available_categories:
+            available_categories = ['car']
+            category_pools['car'] = list(blueprints)
+            category_weights['car'] = 1.0
+
+        # If safe_spawn requested, still keep to known types but already enforced by pools
         blueprintsWalkers = world.get_blueprint_library().filter('walker.pedestrian.*')
 
         # Get spawn points for vehicles
@@ -33,7 +87,17 @@ def setup_traffic(client, world, traffic_config):
         for n, transform in enumerate(spawn_points):
             if n >= num_vehicles:
                 break
-            blueprint = random.choice(blueprints)
+            # Pick a category by weights, restricted to available categories
+            weights = [category_weights[c] for c in available_categories]
+            # Normalize
+            s = sum(weights)
+            weights = [w / s for w in weights]
+            chosen_category = random.choices(available_categories, weights=weights, k=1)[0]
+            pool = category_pools.get(chosen_category, [])
+            # Fallbacks
+            if not pool:
+                pool = category_pools.get('car', []) or list(blueprints)
+            blueprint = random.choice(pool)
             if blueprint.has_attribute('color'):
                 color = random.choice(blueprint.get_attribute('color').recommended_values)
                 blueprint.set_attribute('color', color)

@@ -16,8 +16,8 @@ class InstanceGenerator:
         category_mappings = self.converter.config.get("category_mappings", {})
         category_name_to_token = {entry["name"]: entry["token"] for entry in self.converter.categories}
         
-        # Track unique actor IDs in this scene
-        unique_actors = set()
+        # Track actor -> category (prefer specific categories from bbox 'category')
+        actor_to_category = {}
         
         # Find all 3dbbox JSON files in the scene
         scene_path = self.converter.input_base / scene_folder
@@ -36,19 +36,27 @@ class InstanceGenerator:
                         
                     for annotation in bbox_data:
                         actor_id = annotation.get("actor_id")
-                        actor_type = annotation.get("type")
-                        
-                        if actor_id is not None and actor_type is not None:
-                            unique_actors.add((actor_id, actor_type))
+                        # Prefer explicit category from bbox export; fallback to coarse 'type'
+                        ann_category = annotation.get("category")
+                        if not ann_category:
+                            ann_type = annotation.get("type")
+                            if ann_type == "vehicle":
+                                ann_category = "vehicle.car"  # reasonable default
+                            elif ann_type == "pedestrian":
+                                ann_category = "human.pedestrian.adult"
+                        if actor_id is not None and ann_category is not None:
+                            # First non-empty category wins; assumes consistent category per actor
+                            actor_to_category.setdefault(actor_id, ann_category)
                             
                 except Exception as e:
                     print(f"Error reading bbox file {bbox_file}: {e}")
                     continue
         
-        for actor_id, actor_type in unique_actors:
-            nuscene_category = category_mappings.get(actor_type)
+        for actor_id, ann_category in actor_to_category.items():
+            # Map bbox category to target nuScenes category using converter_config
+            nuscene_category = category_mappings.get(ann_category) or category_mappings.get(ann_category.split('.')[0])
             if not nuscene_category:
-                print(f"Warning: No category mapping found for CARLA type {actor_type}")
+                print(f"Warning: No category mapping found for category key '{ann_category}'")
                 continue
                 
             category_token = category_name_to_token.get(nuscene_category)
