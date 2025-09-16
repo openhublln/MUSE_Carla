@@ -150,6 +150,7 @@ class NuScenesConverter:
             'scene': {},  # scene_name -> token
             'visibility': {},  # (scene_folder, actor_id) -> token
             'log': {},  # scene_name -> token
+            'ego_pose': {},  # (scene_folder, timestamp) -> ego_pose_token
         }
     
     def _generate_token(self) -> str:
@@ -342,18 +343,16 @@ class NuScenesConverter:
         sensor_channels = {
             'Camera_Front': 'CAM_FRONT',
             'Camera_Back': 'CAM_BACK',
-            'Camera_FrontRight': 'CAM_FRONTRIGHT',
-            'Camera_FrontLeft': 'CAM_FRONTLEFT',
-            'Camera_BackRight': 'CAM_BACKRIGHT',
-            'Camera_BackLeft': 'CAM_BACKLEFT',
+            'Camera_FrontRight': 'CAM_FRONT_RIGHT',
+            'Camera_FrontLeft': 'CAM_FRONT_LEFT',
+            'Camera_BackRight': 'CAM_BACK_RIGHT',
+            'Camera_BackLeft': 'CAM_BACK_LEFT',
             'Lidar': 'LIDAR_TOP', 
             'Radar_Front': 'RADAR_FRONT',
-            'Radar_Back': 'RADAR_BACK',
-            'Radar_FrontRight': 'RADAR_FRONTRIGHT',
-            'Radar_FrontLeft': 'RADAR_FRONTLEFT',
-            'Radar_BackRight': 'RADAR_BACKRIGHT',
-            'Radar_BackLeft': 'RADAR_BACKLEFT',
-            'Semantic_Lidar': 'SEMANTIC_LIDAR',
+            'Radar_FrontRight': 'RADAR_FRONT_RIGHT',
+            'Radar_FrontLeft': 'RADAR_FRONT_LEFT',
+            'Radar_BackRight': 'RADAR_BACK_RIGHT',
+            'Radar_BackLeft': 'RADAR_BACK_LEFT',
             'GNSS': 'GNSS',
             'IMU': 'IMU'
         }

@@ -52,16 +52,16 @@ class NuScenesFixes:
         sensor_dirs = {
             'Camera_Front': 'samples/CAM_FRONT',
             'Camera_Back': 'samples/CAM_BACK',
-            'Camera_FrontRight': 'samples/CAM_FRONTRIGHT',
-            'Camera_FrontLeft': 'samples/CAM_FRONTLEFT',
-            'Camera_BackRight': 'samples/CAM_BACKRIGHT',
-            'Camera_BackLeft': 'samples/CAM_BACKLEFT',
+            'Camera_FrontRight': 'samples/CAM_FRONT_RIGHT',
+            'Camera_FrontLeft': 'samples/CAM_FRONT_LEFT',
+            'Camera_BackRight': 'samples/CAM_BACK_RIGHT',
+            'Camera_BackLeft': 'samples/CAM_BACK_LEFT',
             'Lidar': 'samples/LIDAR_TOP',
             'Radar_Front': 'samples/RADAR_FRONT',
-            'Radar_FrontRight': 'samples/RADAR_FRONTRIGHT',
-            'Radar_FrontLeft': 'samples/RADAR_FRONTLEFT',
-            'Radar_BackRight': 'samples/RADAR_BACKRIGHT',
-            'Radar_BackLeft': 'samples/RADAR_BACKLEFT',
+            'Radar_FrontRight': 'samples/RADAR_FRONT_RIGHT',
+            'Radar_FrontLeft': 'samples/RADAR_FRONT_LEFT',
+            'Radar_BackRight': 'samples/RADAR_BACK_RIGHT',
+            'Radar_BackLeft': 'samples/RADAR_BACK_LEFT',
         }
         
         # Create directories
@@ -70,37 +70,8 @@ class NuScenesFixes:
             sweep_dir = sensor_dir.replace('samples/', 'sweeps/')
             (self.output_base / sweep_dir).mkdir(parents=True, exist_ok=True)
         
-        # Convert files from _out directory
-        input_base = Path('_out')
-        if not input_base.exists():
-            print("Warning: _out directory not found, skipping file conversion")
-            return
-        
-        files_converted = 0
-        
-        for scene_folder in input_base.iterdir():
-            if not scene_folder.is_dir() or not scene_folder.name.startswith('scene_'):
-                continue
-                
-            print(f"  Processing scene: {scene_folder.name}")
-            
-            for sensor_name, target_dir in sensor_dirs.items():
-                sensor_path = scene_folder / sensor_name
-                if not sensor_path.exists():
-                    # This is normal for sensors that don't exist in the data
-                    continue
-                
-                target_path = self.output_base / target_dir
-                
-                # Convert files based on sensor type
-                if sensor_name.startswith('Camera'):
-                    files_converted += self._convert_camera_files(sensor_path, target_path)
-                elif sensor_name == 'Lidar':
-                    files_converted += self._convert_lidar_files(sensor_path, target_path)
-                elif sensor_name.startswith('Radar'):
-                    files_converted += self._convert_radar_files(sensor_path, target_path)
-        
-        print(f"  Converted {files_converted} files")
+        # Skip file conversions here; handled during generation
+        print("  Skipping file conversions (handled during sample_data generation)")
     
     def _convert_camera_files(self, source_path: Path, target_path: Path) -> int:
         """Convert camera PNG files to JPG."""
@@ -164,16 +135,9 @@ class NuScenesFixes:
                 # Only apply CARLA->NuScenes coordinate conversion (Y-axis flip)
                 print(f"Keeping LIDAR points in global coordinate system for {npy_file.name} (no sensor transform applied)")
                 
-                # Apply only CARLA->NuScenes coordinate conversion (Y-axis flip)
-                points[:, 1] *= -1
-                # Ensure 5-column format (x, y, z, intensity, ring_index)
-                if points.shape[1] < 5:
-                    padded_points = np.zeros((points.shape[0], 5))
-                    padded_points[:, :points.shape[1]] = points
-                    points = padded_points
-                # Save as binary
-                points.astype(np.float32).tofile(target_file)
-                converted += 1
+                # Skip reconversion; conversion handled by SampleDataGenerator
+                print(f"Skipping LIDAR reconversion for {npy_file.name} (already handled)")
+                continue
             except Exception as e:
                 print(f"    Error converting {npy_file.name}: {e}")
         return converted
@@ -196,25 +160,9 @@ class NuScenesFixes:
                     padded_points[:, :points.shape[1]] = points
                     points = padded_points
                 
-                # Write binary PCD file
-                with open(target_file, 'wb') as f:
-                    # Write PCD header
-                    f.write(b"# .PCD v0.7 - Point Cloud Data file format\n")
-                    f.write(b"VERSION 0.7\n")
-                    f.write(b"FIELDS x y z dyn_prop id rcs vx vy vx_comp vy_comp is_quality_valid ambig_state x_rms y_rms invalid_state pdh0 vx_rms vy_rms\n")
-                    f.write(b"SIZES 4 4 4 1 2 4 4 4 4 4 1 1 1 1 1 1 1 1\n")
-                    f.write(b"TYPES F F F I I F F F F F I I I I I I I I\n")
-                    f.write(b"COUNTS 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1\n")
-                    f.write(f"WIDTH {points.shape[0]}\n".encode())
-                    f.write(b"HEIGHT 1\n")
-                    f.write(b"VIEWPOINT 0 0 0 1 0 0 0\n")
-                    f.write(f"POINTS {points.shape[0]}\n".encode())
-                    f.write(b"DATA binary\n")
-                    
-                    # Write binary data
-                    points.astype(np.float32).tofile(f)
-                
-                converted += 1
+                # Skip reconversion; handled by SampleDataGenerator
+                print(f"Skipping RADAR reconversion for {npy_file.name} (already handled)")
+                continue
                 
             except Exception as e:
                 print(f"    Error converting {npy_file.name}: {e}")
@@ -359,17 +307,26 @@ class NuScenesFixes:
             if modality != 'camera':
                 continue
                 
-            # Map nuScenes channel to config name
-            # e.g. CAM_FRONT -> Camera_Front
+            # Map nuScenes channel to config name with robust underscore-insensitive matching
+            # e.g. CAM_FRONT_RIGHT -> Camera_FrontRight
             config_name = None
+            normalized_channel = channel.replace('_', '') if isinstance(channel, str) else ''
             for name in camera_params:
-                if name.upper().replace('CAMERA_', 'CAM_') == channel:
+                candidate = name.upper().replace('CAMERA_', 'CAM_')
+                if candidate == channel:
                     config_name = name
                     break
             if not config_name:
-                # Try fallback: match by suffix
                 for name in camera_params:
-                    if name.split('_')[-1].upper() in channel:
+                    candidate_no_us = name.upper().replace('CAMERA_', 'CAM_').replace('_', '')
+                    if candidate_no_us == normalized_channel:
+                        config_name = name
+                        break
+            if not config_name:
+                # Fallback: suffix containment ignoring underscores
+                for name in camera_params:
+                    suffix = name.split('_')[-1].upper().replace('_', '')
+                    if suffix and suffix in normalized_channel:
                         config_name = name
                         break
             if config_name:

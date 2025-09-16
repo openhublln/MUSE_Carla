@@ -47,6 +47,11 @@ class SampleDataGenerator:
                     }
                     
                     self.converter.ego_poses.append(ego_pose_entry)
+                    # Track per-scene ego pose token to avoid cross-scene collisions
+                    try:
+                        self.converter.token_maps['ego_pose'][(scene_folder, timestamp)] = token
+                    except Exception:
+                        pass
                     
                 except Exception as e:
                     print(f"Warning: Error processing ego pose file {pose_file}: {e}")
@@ -113,10 +118,15 @@ class SampleDataGenerator:
         ego_pose_dir = scene_path / self.converter.EGO_POSE_FOLDER
         ego_pose_timestamps = {}
         if ego_pose_dir.exists():
-            # Create mapping from timestamp to ego pose token using already generated ego poses
-            for ego_pose_entry in self.converter.ego_poses:
-                # Only include ego poses from this scene (we can't easily filter by scene, so include all)
-                ego_pose_timestamps[ego_pose_entry["timestamp"]] = ego_pose_entry["token"]
+            # Map only timestamps present in this scene's ego_pose folder
+            for pose_file in ego_pose_dir.glob("*.json"):
+                try:
+                    ts = int(pose_file.stem)
+                    token = self.converter.token_maps.get('ego_pose', {}).get((scene_folder, ts), "")
+                    if token:
+                        ego_pose_timestamps[ts] = token
+                except Exception:
+                    continue
 
         for sensor in simulation_sensors:
             sensor_name = sensor["name"]
@@ -201,8 +211,19 @@ class SampleDataGenerator:
                         img.convert('RGB').save(target_file, 'JPEG')
                         print(f"Converted and copied {file.name} to {target_file.name}")
                     elif sensor_type == "lidar":
-                        # Convert NPY to BIN for LIDAR
+                        # Convert NPY to BIN for LIDAR with CARLA->NuScenes Y-axis flip and padding
                         points = np.load(file)
+                        try:
+                            if points.shape[1] >= 2:
+                                points[:, 1] *= -1  # Y-axis flip
+                        except Exception:
+                            pass
+                        if points.ndim == 1:
+                            points = points.reshape(-1, 3)
+                        if points.shape[1] < 5:
+                            padded_points = np.zeros((points.shape[0], 5), dtype=points.dtype)
+                            padded_points[:, :points.shape[1]] = points
+                            points = padded_points
                         points.astype(np.float32).tofile(target_file)
                         print(f"Converted {file.name} to {target_file.name}")
                     elif sensor_type == "radar":
