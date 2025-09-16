@@ -4,6 +4,8 @@ from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion,
 from PIL import Image
 import shutil
 import numpy as np
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class SampleDataGenerator:
     def __init__(self, converter):
@@ -166,56 +168,54 @@ class SampleDataGenerator:
             files = sorted([f for f in current_sensor_folder.glob(f"*{ext}") if f.is_file()])
             if not files:
                 continue
-            
+
             # Create target directory for this sensor
             target_dir = self.converter.output_base / f"samples/{channel}"
             target_dir.mkdir(parents=True, exist_ok=True)
-            
-            entries = []
-            for file in files:
+
+            def _process_one(file_path: Path):
                 try:
-                    timestamp = 0
+                    # Parse timestamp
                     try:
-                        timestamp = int(file.stem)
+                        timestamp_local = int(file_path.stem)
                     except ValueError:
                         try:
-                            timestamp = int(file.stem.split('_')[0])
+                            timestamp_local = int(file_path.stem.split('_')[0])
                         except (ValueError, IndexError):
-                            continue
-                    
-                    closest_keyframe_ts = min(keyframe_timestamps, key=lambda x: abs(x - timestamp), default=None)
+                            return None
+
+                    closest_keyframe_ts = min(keyframe_timestamps, key=lambda x: abs(x - timestamp_local), default=None)
                     if closest_keyframe_ts is None:
-                        continue
-                    sample_token = sample_timestamps[closest_keyframe_ts]
-                    
-                    is_key_frame = timestamp in keyframe_timestamps
-                    ego_pose_token = ego_pose_timestamps.get(timestamp, "")
-                    
-                    # Create the correct filename for nuScenes format
+                        return None
+                    sample_token_local = sample_timestamps[closest_keyframe_ts]
+
+                    is_key_frame_local = timestamp_local in keyframe_timestamps
+                    ego_pose_token_local = ego_pose_timestamps.get(timestamp_local, "")
+
+                    # Output filename
                     if sensor_type == "camera":
-                        filename = f"samples/{channel}/{timestamp}.jpg"
+                        filename_local = f"samples/{channel}/{timestamp_local}.jpg"
                     elif sensor_type == "lidar":
-                        filename = f"samples/{channel}/{timestamp}.bin"
+                        filename_local = f"samples/{channel}/{timestamp_local}.bin"
                     elif sensor_type == "radar":
-                        filename = f"samples/{channel}/{timestamp}.pcd"
+                        filename_local = f"samples/{channel}/{timestamp_local}.pcd"
                     elif sensor_type == "semantic_lidar":
-                        filename = f"samples/{channel}/{timestamp}.bin"
+                        filename_local = f"samples/{channel}/{timestamp_local}.bin"
                     else:
-                        filename = f"samples/{channel}/{timestamp}{ext}"
-                    
-                    # Copy the file to the target directory
-                    target_file = target_dir / filename.split('/')[-1]  # Use just the filename for the target path
+                        filename_local = f"samples/{channel}/{timestamp_local}{ext}"
+
+                    target_file_local = target_dir / filename_local.split('/')[-1]
+
+                    # Convert/copy
                     if sensor_type == "camera":
-                        # Convert PNG to JPG for camera images
-                        img = Image.open(file)
-                        img.convert('RGB').save(target_file, 'JPEG')
-                        print(f"Converted and copied {file.name} to {target_file.name}")
+                        img = Image.open(file_path)
+                        img.convert('RGB').save(target_file_local, 'JPEG')
+                        print(f"Converted and copied {file_path.name} to {target_file_local.name}")
                     elif sensor_type == "lidar":
-                        # Convert NPY to BIN for LIDAR with CARLA->NuScenes Y-axis flip and padding
-                        points = np.load(file)
+                        points = np.load(file_path)
                         try:
                             if points.shape[1] >= 2:
-                                points[:, 1] *= -1  # Y-axis flip
+                                points[:, 1] *= -1
                         except Exception:
                             pass
                         if points.ndim == 1:
@@ -224,19 +224,15 @@ class SampleDataGenerator:
                             padded_points = np.zeros((points.shape[0], 5), dtype=points.dtype)
                             padded_points[:, :points.shape[1]] = points
                             points = padded_points
-                        points.astype(np.float32).tofile(target_file)
-                        print(f"Converted {file.name} to {target_file.name}")
+                        points.astype(np.float32).tofile(target_file_local)
+                        print(f"Converted {file_path.name} to {target_file_local.name}")
                     elif sensor_type == "radar":
-                        # Convert NPY to PCD for RADAR
-                        points = np.load(file)
-                        # Ensure 18-column format for RADAR
+                        points = np.load(file_path)
                         if points.shape[1] < 18:
                             padded_points = np.zeros((points.shape[0], 18))
                             padded_points[:, :points.shape[1]] = points
                             points = padded_points
-                        
-                        # Write binary PCD file
-                        with open(target_file, 'wb') as f:
+                        with open(target_file_local, 'wb') as f:
                             f.write(b"# .PCD v0.7 - Point Cloud Data file format\n")
                             f.write(b"VERSION 0.7\n")
                             f.write(b"FIELDS x y z dyn_prop id rcs vx vy vx_comp vy_comp is_quality_valid ambig_state x_rms y_rms invalid_state pdh0 vx_rms vy_rms\n")
@@ -249,39 +245,50 @@ class SampleDataGenerator:
                             f.write(f"POINTS {points.shape[0]}\n".encode())
                             f.write(b"DATA binary\n")
                             points.astype(np.float32).tofile(f)
-                        print(f"Converted {file.name} to {target_file.name}")
+                        print(f"Converted {file_path.name} to {target_file_local.name}")
                     elif sensor_type == "semantic_lidar":
-                        # Convert NPY to BIN for semantic LIDAR
-                        points = np.load(file)
-                        points.astype(np.float32).tofile(target_file)
-                        print(f"Converted {file.name} to {target_file.name}")
+                        points = np.load(file_path)
+                        points.astype(np.float32).tofile(target_file_local)
+                        print(f"Converted {file_path.name} to {target_file_local.name}")
                     else:
-                        shutil.copy2(file, target_file)
-                        print(f"Copied {file.name} to {target_file.name}")
-                    
-                    token = generate_token()
-                    entry = {
-                        "token": token,
-                        "sample_token": sample_token,
-                        "ego_pose_token": ego_pose_token,
+                        shutil.copy2(file_path, target_file_local)
+                        print(f"Copied {file_path.name} to {target_file_local.name}")
+
+                    token_local = generate_token()
+                    entry_local = {
+                        "token": token_local,
+                        "sample_token": sample_token_local,
+                        "ego_pose_token": ego_pose_token_local,
                         "calibrated_sensor_token": calibrated_sensor_token,
-                        "filename": filename,
+                        "filename": filename_local,
                         "fileformat": fileformat,
                         "width": width,
                         "height": height,
-                        "timestamp": timestamp,
-                        "is_key_frame": is_key_frame,
+                        "timestamp": timestamp_local,
+                        "is_key_frame": is_key_frame_local,
                         "next": "",
                         "prev": ""
                     }
-                    entries.append(entry)
+                    return (timestamp_local, entry_local)
                 except Exception as e:
-                    print(f"Warning: Error processing file {file} for sensor {sensor_name}: {e}")
-                    continue
-            
-            for i, entry in enumerate(entries):
+                    print(f"Warning: Error processing file {file_path} for sensor {sensor_name}: {e}")
+                    return None
+
+            max_workers = min(32, (os.cpu_count() or 4) * 2)
+            results = []
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {executor.submit(_process_one, f): f for f in files}
+                for future in as_completed(future_map):
+                    res = future.result()
+                    if res is not None:
+                        results.append(res)
+
+            # Preserve chronological linking
+            results.sort(key=lambda x: x[0])
+            ordered_entries = [e for _, e in results]
+            for i, entry in enumerate(ordered_entries):
                 if i > 0:
-                    entry["prev"] = entries[i-1]["token"]
-                if i < len(entries) - 1:
-                    entry["next"] = entries[i+1]["token"]
-                self.converter.sample_data.append(entry) 
+                    entry["prev"] = ordered_entries[i-1]["token"]
+                if i < len(ordered_entries) - 1:
+                    entry["next"] = ordered_entries[i+1]["token"]
+                self.converter.sample_data.append(entry)
