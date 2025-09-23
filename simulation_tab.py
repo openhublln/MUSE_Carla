@@ -23,6 +23,10 @@ class SimulationTab(QWidget):
         seconds_container = self._create_spinbox("Seconds per Scene:", 1, 1000, 20)
         self.seconds_per_scene = seconds_container.findChild(QSpinBox)
         
+        # Simulation frequency (Hz)
+        frequency_container = self._create_spinbox("Frequency (Hz):", 1, 200, 20)
+        self.frequency_hz = frequency_container.findChild(QSpinBox)
+        
         self.base_save_path = self._create_path_selector("Base Save Path:", "./_out")
         
         # Traffic Group
@@ -46,7 +50,7 @@ class SimulationTab(QWidget):
         traffic_group.setLayout(traffic_layout)
         
         # Add all widgets to main layout
-        for widget in [num_scenes_container, seconds_container, 
+        for widget in [num_scenes_container, seconds_container, frequency_container, 
                       self.base_save_path, traffic_group]:
             sim_layout.addWidget(widget)
         
@@ -56,7 +60,7 @@ class SimulationTab(QWidget):
         self.setLayout(self.layout)
         
         # Connect signals
-        for spinbox in [self.num_scenes, self.seconds_per_scene, 
+        for spinbox in [self.num_scenes, self.seconds_per_scene, self.frequency_hz, 
                        self.num_vehicles, self.num_pedestrians]:
             spinbox.valueChanged.connect(self.configChanged.emit)
         for checkbox in [self.safe_spawn, self.car_lights_on]:
@@ -97,6 +101,7 @@ class SimulationTab(QWidget):
             "simulation": {
                 "num_scenes": self.num_scenes.value(),
                 "seconds_per_scene": self.seconds_per_scene.value(),
+                "frequency_hz": self.frequency_hz.value(),
                 "base_save_path": self.path_edit.text(),
                 "traffic": {
                     "num_vehicles": self.num_vehicles.value(),

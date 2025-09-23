@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from bisect import bisect_left
 from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, adjust_z_for_ego_pose
 from PIL import Image
 import shutil
@@ -10,6 +11,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 class SampleDataGenerator:
     def __init__(self, converter):
         self.converter = converter
+        # Cache for sensor and calibrated sensor tables to avoid repeated disk reads
+        self._sensor_json_cache = None
+        self._calibrated_json_cache = None
+        # Configurable worker count via converter_config.yml → performance.max_workers
+        perf_cfg = self.converter.config.get("performance", {}) if hasattr(self.converter, "config") else {}
+        default_workers = max(1, min(32, (os.cpu_count() or 4) * 2))
+        try:
+            self.max_workers = int(perf_cfg.get("max_workers", default_workers))
+            if self.max_workers < 1:
+                self.max_workers = 1
+        except Exception:
+            self.max_workers = default_workers
+        # Verbose gate to throttle per-file prints
+        self.verbose = bool(perf_cfg.get("verbose", False))
 
     def generate_ego_poses_for_scene(self, scene_folder: str):
         """Generate ego poses for a scene. This is called before annotation generation."""
@@ -65,10 +80,14 @@ class SampleDataGenerator:
         calibrated_json_path = self.converter.output_base / self.converter.version / 'calibrated_sensor.json'
         
         try:
-            with open(sensor_json_path, 'r') as f:
-                sensor_json = json.load(f)
-            with open(calibrated_json_path, 'r') as f:
-                calibrated_json = json.load(f)
+            if self._sensor_json_cache is None:
+                with open(sensor_json_path, 'r') as f:
+                    self._sensor_json_cache = json.load(f)
+            if self._calibrated_json_cache is None:
+                with open(calibrated_json_path, 'r') as f:
+                    self._calibrated_json_cache = json.load(f)
+            sensor_json = self._sensor_json_cache
+            calibrated_json = self._calibrated_json_cache
         except FileNotFoundError as e:
             print(f"Error: Required JSON file not found for sample_data generation: {e}")
             return
@@ -87,6 +106,17 @@ class SampleDataGenerator:
         scene_samples = [entry for entry in self.converter.samples if entry["scene_token"] == scene_token]
         sample_timestamps = {entry["timestamp"]: entry["token"] for entry in scene_samples}
         keyframe_timestamps = set(sample_timestamps.keys())
+        sorted_keyframes = sorted(keyframe_timestamps)
+        def nearest_keyframe(ts: int):
+            if not sorted_keyframes:
+                return None
+            i = bisect_left(sorted_keyframes, ts)
+            if i == 0:
+                return sorted_keyframes[0]
+            if i == len(sorted_keyframes):
+                return sorted_keyframes[-1]
+            before, after = sorted_keyframes[i-1], sorted_keyframes[i]
+            return before if (ts - before) <= (after - ts) else after
         
         all_sensor_timestamps = set()
         for sensor in simulation_sensors:
@@ -184,7 +214,7 @@ class SampleDataGenerator:
                         except (ValueError, IndexError):
                             return None
 
-                    closest_keyframe_ts = min(keyframe_timestamps, key=lambda x: abs(x - timestamp_local), default=None)
+                    closest_keyframe_ts = nearest_keyframe(timestamp_local)
                     if closest_keyframe_ts is None:
                         return None
                     sample_token_local = sample_timestamps[closest_keyframe_ts]
@@ -210,7 +240,8 @@ class SampleDataGenerator:
                     if sensor_type == "camera":
                         img = Image.open(file_path)
                         img.convert('RGB').save(target_file_local, 'JPEG')
-                        print(f"Converted and copied {file_path.name} to {target_file_local.name}")
+                        if self.verbose:
+                            print(f"Converted and copied {file_path.name} to {target_file_local.name}")
                     elif sensor_type == "lidar":
                         points = np.load(file_path)
                         try:
@@ -225,7 +256,8 @@ class SampleDataGenerator:
                             padded_points[:, :points.shape[1]] = points
                             points = padded_points
                         points.astype(np.float32).tofile(target_file_local)
-                        print(f"Converted {file_path.name} to {target_file_local.name}")
+                        if self.verbose:
+                            print(f"Converted {file_path.name} to {target_file_local.name}")
                     elif sensor_type == "radar":
                         points = np.load(file_path)
                         if points.shape[1] < 18:
@@ -245,14 +277,17 @@ class SampleDataGenerator:
                             f.write(f"POINTS {points.shape[0]}\n".encode())
                             f.write(b"DATA binary\n")
                             points.astype(np.float32).tofile(f)
-                        print(f"Converted {file_path.name} to {target_file_local.name}")
+                        if self.verbose:
+                            print(f"Converted {file_path.name} to {target_file_local.name}")
                     elif sensor_type == "semantic_lidar":
                         points = np.load(file_path)
                         points.astype(np.float32).tofile(target_file_local)
-                        print(f"Converted {file_path.name} to {target_file_local.name}")
+                        if self.verbose:
+                            print(f"Converted {file_path.name} to {target_file_local.name}")
                     else:
                         shutil.copy2(file_path, target_file_local)
-                        print(f"Copied {file_path.name} to {target_file_local.name}")
+                        if self.verbose:
+                            print(f"Copied {file_path.name} to {target_file_local.name}")
 
                     token_local = generate_token()
                     entry_local = {
@@ -274,7 +309,7 @@ class SampleDataGenerator:
                     print(f"Warning: Error processing file {file_path} for sensor {sensor_name}: {e}")
                     return None
 
-            max_workers = min(32, (os.cpu_count() or 4) * 2)
+            max_workers = self.max_workers
             results = []
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 future_map = {executor.submit(_process_one, f): f for f in files}

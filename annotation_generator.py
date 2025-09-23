@@ -1,6 +1,7 @@
 import json
 import numpy as np
 from typing import List, Dict
+from scipy.spatial import cKDTree
 # Assuming nuscene_utils and carla types are available or passed through self.converter
 from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, carla_camera_rotation_to_nuscenes_quaternion, count_points_in_box, transform_points_to_global, transform_radar_points_to_global, transform_box_to_ego_frame
 import carla # For carla.Transform type hint if needed directly
@@ -39,10 +40,16 @@ class AnnotationGenerator:
         return camera_count
 
     def _compute_average_visibility(self, scene_folder: str, timestamp: int, actor_id: int) -> float:
+        # Use converter-level cache to avoid recomputation
+        cache_key = (scene_folder, timestamp, actor_id)
+        cached = self.converter._visibility_cache.get(cache_key)
+        if cached is not None:
+            return cached
         scene_path = self.converter.input_base / scene_folder
         total_visibility = 0.0
         total_cameras = self._count_total_cameras(scene_folder)
         if total_cameras == 0:
+            self.converter._visibility_cache[cache_key] = 0.0
             return 0.0
         
         for sensor_config in self.converter.sim_config.get("sensors", []):
@@ -69,8 +76,9 @@ class AnnotationGenerator:
                 except Exception as e:
                     # print(f"Warning: Error reading bbox file {bbox_file} for visibility: {e}")
                     continue
-        
-        return total_visibility / total_cameras if total_cameras > 0 else 0.0
+        avg = total_visibility / total_cameras if total_cameras > 0 else 0.0
+        self.converter._visibility_cache[cache_key] = avg
+        return avg
 
     def generate_sample_annotations(self, scene_folder: str, scene_token: str):
         sample_token_map = {entry["timestamp"]: entry["token"] 
@@ -82,6 +90,11 @@ class AnnotationGenerator:
             return
 
         instance_annotations = {} 
+        # Per-scene caches to avoid reloading arrays repeatedly
+        lidar_points_cache = {}
+        lidar_kd_cache = {}
+        radar_points_cache = {}
+        radar_kd_cache = {}
         scene_path = self.converter.input_base / scene_folder
         # found_any_bbox_files = False # DEBUG
         # annotations_created_for_scene = 0 # DEBUG
@@ -165,12 +178,34 @@ class AnnotationGenerator:
                         lidar_file = scene_path / lidar_sensor_name / f"{timestamp}.npy"
                         if lidar_file.exists():
                             try:
-                                # Load raw LIDAR points (already in global CARLA coordinates)
-                                lidar_points_carla = np.load(lidar_file)
-                                # Apply same CARLA→NuScenes coordinate conversion as annotations
-                                lidar_points_nuscenes = lidar_points_carla.copy()
-                                lidar_points_nuscenes[:, 1] *= -1  # Negate Y coordinate
-                                num_lidar_pts = count_points_in_box(lidar_points_nuscenes, box_center, box_size, quaternion)
+                                # Load raw LIDAR points once and invert Y once per timestamp
+                                lidar_points_nuscenes = lidar_points_cache.get(timestamp)
+                                if lidar_points_nuscenes is None:
+                                    lidar_points_carla = np.load(lidar_file)
+                                    lidar_points_nuscenes = lidar_points_carla
+                                    try:
+                                        lidar_points_nuscenes = lidar_points_nuscenes.astype(np.float32, copy=False)
+                                    except Exception:
+                                        pass
+                                    lidar_points_nuscenes = lidar_points_nuscenes.copy()
+                                    lidar_points_nuscenes[:, 1] *= -1  # Negate Y coordinate
+                                    lidar_points_cache[timestamp] = lidar_points_nuscenes
+                                # KDTree candidate filter
+                                tree = lidar_kd_cache.get(timestamp)
+                                if tree is None:
+                                    tree = cKDTree(lidar_points_nuscenes[:, :3])
+                                    lidar_kd_cache[timestamp] = tree
+                                # Conservative AABB in global frame: use box center +/- size to get candidates
+                                half = np.array(box_size, dtype=np.float32) / 2.0
+                                aabb_min = np.array(box_center, dtype=np.float32) - half
+                                aabb_max = np.array(box_center, dtype=np.float32) + half
+                                # Query candidates within sphere of radius=norm(half) around center, then refine
+                                radius = float(np.linalg.norm(half))
+                                idxs = tree.query_ball_point(box_center, r=radius)
+                                if idxs:
+                                    candidates = lidar_points_nuscenes[idxs, :3]
+                                    # Exact oriented box check
+                                    num_lidar_pts = count_points_in_box(candidates, box_center, box_size, quaternion)
                             except Exception as e:
                                 print(f"Warning: Error processing lidar points for annotation: {e}")
                         
@@ -181,16 +216,30 @@ class AnnotationGenerator:
                             radar_file = scene_path / radar_name / f"{timestamp}.npy"
                             if radar_file.exists():
                                 try:
-                                    radar_points = np.load(radar_file)
-                                    sensor_transform_rel, ego_transform_abs = self.converter._get_sensor_transform(scene_folder, radar_name, timestamp)
-                                    if sensor_transform_rel and ego_transform_abs:
-                                        # Transform radar points to global CARLA coordinates
-                                        global_points_carla = transform_radar_points_to_global(radar_points, sensor_transform_rel, ego_transform_abs)
-                                        if len(global_points_carla) > 0:
-                                            # Apply same CARLA→NuScenes coordinate conversion as annotations
-                                            global_points_nuscenes = global_points_carla.copy()
-                                            global_points_nuscenes[:, 1] *= -1  # Negate Y coordinate
-                                            num_radar_pts += count_points_in_box(global_points_nuscenes, box_center, box_size, quaternion)
+                                    key = (radar_name, timestamp)
+                                    radar_points_nuscenes = radar_points_cache.get(key)
+                                    if radar_points_nuscenes is None:
+                                        radar_points = np.load(radar_file)
+                                        sensor_transform_rel, ego_transform_abs = self.converter._get_sensor_transform(scene_folder, radar_name, timestamp)
+                                        if sensor_transform_rel and ego_transform_abs:
+                                            global_points_carla = transform_radar_points_to_global(radar_points, sensor_transform_rel, ego_transform_abs)
+                                            if len(global_points_carla) > 0:
+                                                radar_points_nuscenes = global_points_carla.astype(np.float32, copy=False)
+                                                radar_points_nuscenes = radar_points_nuscenes.copy()
+                                                radar_points_nuscenes[:, 1] *= -1
+                                                radar_points_cache[key] = radar_points_nuscenes
+                                    # KDTree candidate filter
+                                    if radar_points_nuscenes is not None and len(radar_points_nuscenes) > 0:
+                                        tree = radar_kd_cache.get(key)
+                                        if tree is None:
+                                            tree = cKDTree(radar_points_nuscenes[:, :3])
+                                            radar_kd_cache[key] = tree
+                                        half = np.array(box_size, dtype=np.float32) / 2.0
+                                        radius = float(np.linalg.norm(half))
+                                        idxs = tree.query_ball_point(box_center, r=radius)
+                                        if idxs:
+                                            candidates = radar_points_nuscenes[idxs, :3]
+                                            num_radar_pts += count_points_in_box(candidates, box_center, box_size, quaternion)
                                 except Exception as e:
                                     print(f"Warning: Error processing radar points for {radar_name} for annotation: {e}")
 

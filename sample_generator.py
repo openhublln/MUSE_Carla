@@ -22,25 +22,8 @@ class SampleGenerator:
         # Sort timestamps and remove duplicates
         timestamps = sorted(set(timestamps))
         
-        # Get all timestamps that have data files
-        data_timestamps = set()
-        for scene_folder_name in self.converter.scene_folders:
-            scene_path = self.converter.input_base / scene_folder_name
-            for sensor_folder in scene_path.iterdir():
-                if not sensor_folder.is_dir():
-                    continue
-                # Get all data files (excluding bbox files)
-                data_files = [f for f in sensor_folder.glob("*.*") 
-                            if not f.name.endswith(('_bbox.json', '_3dbbox.json'))]
-                for data_file in data_files:
-                    try:
-                        ts = int(data_file.stem.split('_')[0])
-                        data_timestamps.add(ts)
-                    except (ValueError, IndexError):
-                        continue
-
-        # Only keep timestamps that have actual data files
-        valid_timestamps = [ts for ts in timestamps if ts in data_timestamps]
+        # Use provided timestamps from the current scene; they already reflect available data
+        valid_timestamps = timestamps
         if not valid_timestamps:
             return []
 

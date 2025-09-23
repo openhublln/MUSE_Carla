@@ -141,9 +141,14 @@ def main():
         sensors_config = config["sensors"]
         traffic_config = sim_config.get("traffic", {}) 
 
+        # Simulation frequency (Hz) configurable via config.yml; defaults to 20Hz
+        frequency_hz = int(sim_config.get("frequency_hz", 20))
+        if frequency_hz <= 0:
+            raise ValueError("simulation.frequency_hz must be a positive integer")
+
         num_scenes = sim_config["num_scenes"]
         seconds_per_scene = sim_config["seconds_per_scene"]
-        ticks_per_scene = seconds_per_scene * 20  # 20Hz simulation
+        ticks_per_scene = int(seconds_per_scene * frequency_hz)  # Configurable-Hz simulation
         base_save_path = sim_config["base_save_path"]
 
         # Set random seed if specified
@@ -158,7 +163,7 @@ def main():
         world = client.get_world()
         settings = world.get_settings()
         settings.synchronous_mode = True
-        settings.fixed_delta_seconds = 0.05  # 20Hz simulation
+        settings.fixed_delta_seconds = 1.0 / float(frequency_hz)  # Configurable-Hz simulation
         world.apply_settings(settings)
 
         # Ensure the output directory exists
@@ -170,7 +175,8 @@ def main():
         
         # Let the traffic settle for a few seconds
         print("Letting traffic settle...")
-        for _ in range(50):  # 2.5 seconds at 20Hz
+        settle_ticks = max(1, int(round(2.5 * frequency_hz)))  # ~2.5 seconds
+        for _ in range(settle_ticks):
             world.tick()
 
         # Configuration du traffic manager
@@ -209,7 +215,8 @@ def main():
                             break
 
                     print("Ego vehicle spawned, waiting for stabilization...")
-                    for _ in range(20):
+                    stabilize_ticks = max(1, int(round(1.0 * frequency_hz)))  # ~1 second
+                    for _ in range(stabilize_ticks):
                         world.tick()
 
                     # Collect log info if not already collected
@@ -241,7 +248,7 @@ def main():
 
                     # Run simulation and collect ego pose at each tick
                     print(f"\nStarting data collection for scene {scene_id}...")
-                    print(f"Expected frames: {ticks_per_scene} (20Hz for {seconds_per_scene} seconds)")
+                    print(f"Expected frames: {ticks_per_scene} ({frequency_hz}Hz for {seconds_per_scene} seconds)")
                     
                     for tick in range(ticks_per_scene):
                         world.tick()
@@ -321,7 +328,8 @@ def main():
         # Nettoyer toutes les scènes après la fin des simulations
         for path in scene_paths:
             print("Nettoyage du dataset pour la scène", path)
-            clean_scene_data(path, sensor_names)
+            sensors_for_cleanup = list(sensor_names) + [EGO_POSE_FOLDER]
+            clean_scene_data(path, sensors_for_cleanup)
         print("Toutes les scènes ont été nettoyées avec succès !")
         
         # Generate bounding box annotations

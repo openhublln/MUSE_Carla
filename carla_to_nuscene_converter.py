@@ -113,6 +113,9 @@ class NuScenesConverter:
         self._debug_calibrations = False  # Set to True to enable debug output
         self._debug_annotations = False  # Disable debug output for cleaner conversion
 
+        # Visibility computation cache: (scene_folder, timestamp, actor_id) -> avg_visibility
+        self._visibility_cache: Dict[Tuple[str, int, int], float] = {}
+
     def _load_config(self, config_path: str) -> dict:
         """Load and validate the converter configuration."""
         with open(config_path, 'r') as f:

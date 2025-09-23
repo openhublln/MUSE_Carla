@@ -90,3 +90,7 @@ attributes:
   human:
     - name: 'pedestrian.moving'
     - name: 'pedestrian.standing'
+
+performance:
+  max_workers: 5
+  verbose: false

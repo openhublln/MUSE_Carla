@@ -157,7 +157,9 @@ class MainWindow(QMainWindow):
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                universal_newlines=True
+                universal_newlines=True,
+                encoding="utf-8",
+                errors="replace"
             )
             
             # Show a more informative dialog
@@ -332,7 +334,9 @@ class MainWindow(QMainWindow):
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                universal_newlines=True
+                universal_newlines=True,
+                encoding="utf-8",
+                errors="replace"
             )
             
             # Wait for the process to complete and get output
