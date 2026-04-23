@@ -267,31 +267,83 @@ class MainWindow(QMainWindow):
             )
     
     def launch_carla(self):
-        """Launch CARLA server using relative path"""
+        """Launch CARLA server using relative path (Linux/Windows compatible)"""
         try:
             # Get the path to CARLA by going up from current directory
             current_dir = Path(os.path.abspath(__file__))  # Get path to current script
-            carla_root = current_dir.parents[2]  # Go up 3 levels to CARLA root
-            carla_exe = carla_root / "CarlaUnreal.exe"
-            
-            if not carla_exe.exists():
-                raise FileNotFoundError(f"CARLA executable not found at: {carla_exe}")
-            
-            # Launch CARLA in a new process
-            subprocess.Popen(
-                str(carla_exe),
-                cwd=str(carla_root),
-                creationflags=subprocess.CREATE_NEW_CONSOLE
-            )
-            
+            carla_root = current_dir.parents[3]  # Go up 4 levels to CARLA root
+
+            if sys.platform == "win32":
+                carla_exe = carla_root / "CarlaUnreal.exe"
+                if not carla_exe.exists():
+                    raise FileNotFoundError(f"CARLA executable not found at: {carla_exe}")
+                subprocess.Popen(
+                    str(carla_exe),
+                    cwd=str(carla_root),
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+            else:
+                # Linux: prefer the shell launcher, fall back to bare binary
+                carla_sh = carla_root / "CarlaUnreal.sh"
+                carla_bin = carla_root / "CarlaUnreal"
+                if carla_sh.exists():
+                    carla_exe = carla_sh
+                elif carla_bin.exists():
+                    carla_exe = carla_bin
+                else:
+                    raise FileNotFoundError(
+                        f"CARLA executable not found at: {carla_sh} or {carla_bin}"
+                    )
+
+                # Try to open in a new terminal window; fall back to background process
+                log_file = carla_root / "carla_launch.log"
+                terminal_cmds = [
+                    ["tilix", "-e",
+                     f"bash -c '{carla_exe}; exec bash'"],
+                    ["gnome-terminal", "--disable-factory", "--", "bash", "-c",
+                     f"{carla_exe}; exec bash"],
+                    ["xterm", "-e", f"{carla_exe}"],
+                    ["konsole", "--noclose", "-e", f"{carla_exe}"],
+                    ["xfce4-terminal", "--hold", "-e", f"{carla_exe}"],
+                ]
+                launched = False
+                for cmd in terminal_cmds:
+                    try:
+                        ret = subprocess.Popen(
+                            cmd, cwd=str(carla_root),
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        # Give it 1 second and check it didn't immediately die
+                        import time
+                        time.sleep(1)
+                        if ret.poll() is None:
+                            launched = True
+                            break
+                    except FileNotFoundError:
+                        continue
+
+                if not launched:
+                    # All GUI terminals failed — launch detached, log to file
+                    with open(log_file, "w") as lf:
+                        subprocess.Popen(
+                            [str(carla_exe)],
+                            cwd=str(carla_root),
+                            stdout=lf,
+                            stderr=lf,
+                            start_new_session=True
+                        )
+
             # Show a message to wait for CARLA to start
             QMessageBox.information(
                 self,
                 "CARLA Starting",
-                "CARLA is starting...\n\n" +
-                "Please wait for the simulator to fully load before running the simulation."
+                "CARLA is starting...\n\n"
+                "Please wait for the simulator to fully load before running the simulation.\n\n"
+                "On Linux you can monitor the output with:\n"
+                f"  tail -f {carla_root}/carla_launch.log"
             )
-            
+
         except Exception as e:
             QMessageBox.critical(
                 self,
