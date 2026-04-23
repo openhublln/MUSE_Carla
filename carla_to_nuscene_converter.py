@@ -135,7 +135,7 @@ class NuScenesConverter:
         self.maps = [{
             "token": self._generate_token(),
             "log_tokens": [],  # Will be populated with log tokens
-            "category": "none",
+            "category": "semantic_prior",
             "filename": "maps/none.png"
         }]
         self.samples = []
@@ -505,6 +505,8 @@ class NuScenesConverter:
 
         # After generating samples and calibrated sensors, generate sample_data
         self.sample_data_gen_instance.generate_sample_data_entries(scene_folder, scene_token)
+        # Ensure every sample_data timestamp has a matching ego_pose (interpolates missing)
+        self.sample_data_gen_instance.ensure_ego_poses_for_scene_sample_data(scene_folder)
 
     def convert_all(self):
         """Convert all scenes specified in the config."""
@@ -579,7 +581,7 @@ class NuScenesConverter:
         dest_maps_dir = self.output_base / 'maps'
 
         # Set default values for the map record.
-        map_category = 'none'
+        map_category = 'semantic_prior'
         map_filename = 'maps/none.png'
 
         try:
@@ -621,7 +623,7 @@ class NuScenesConverter:
             # Create minimal vector map for NuScenesMap API compatibility
             self._create_minimal_vector_map(dest_map_sub_dir, original_map_name, map_meta)
             
-            map_category = original_map_name
+            map_category = 'semantic_prior'
             map_filename = f'maps/{original_map_name}/{original_map_name}_basemap.png'
 
         except (FileNotFoundError, Exception) as e:
@@ -655,7 +657,7 @@ class NuScenesConverter:
                 print(f"Warning: Map file not found at expected location: {expected_file_path}")
                 # If file doesn't exist, fall back to default
                 map_filename = 'maps/none.png'
-                map_category = 'none'
+                map_category = 'semantic_prior'
                 print(f"Falling back to: {map_filename}")
                 # Update the map record with fallback values
                 self.maps[0]['category'] = map_category
@@ -735,6 +737,41 @@ class NuScenesConverter:
         except Exception as e:
             print(f"Warning: Failed to create vector map files: {e}")
 
+    def _backfill_sample_fields(self):
+        """Populate sample['anns'] and sample['data'] from generated tables.
+        
+        sample['anns']  -> list of sample_annotation tokens for this sample
+        sample['data']  -> dict mapping channel name to sample_data token (keyframes only)
+        """
+        # Build sample_token -> [annotation_token, ...]
+        anns_by_sample: Dict[str, List[str]] = {}
+        for ann in self.sample_annotations:
+            st = ann['sample_token']
+            anns_by_sample.setdefault(st, []).append(ann['token'])
+
+        # Build calibrated_sensor_token -> channel name
+        # sensor_token -> channel
+        sensor_token_to_channel: Dict[str, str] = {s['token']: s['channel'] for s in self.sensors}
+        # calibrated_sensor_token -> sensor_token
+        cs_to_sensor: Dict[str, str] = {cs['token']: cs['sensor_token'] for cs in self.calibrated_sensors}
+
+        # Build sample_token -> {channel: sd_token} (only keyframes)
+        data_by_sample: Dict[str, Dict[str, str]] = {}
+        for sd in self.sample_data:
+            if not sd.get('is_key_frame'):
+                continue
+            st = sd['sample_token']
+            cs_token = sd.get('calibrated_sensor_token', '')
+            sensor_tok = cs_to_sensor.get(cs_token, '')
+            channel = sensor_token_to_channel.get(sensor_tok, '')
+            if channel:
+                data_by_sample.setdefault(st, {})[channel] = sd['token']
+
+        for sample in self.samples:
+            st = sample['token']
+            sample['anns'] = anns_by_sample.get(st, [])
+            sample['data'] = data_by_sample.get(st, {})
+
     def _write_all_tables(self):
         """Write all NuScenes tables to their respective JSON files."""
         # Link logs to map (map.log_tokens should contain log tokens)
@@ -752,6 +789,9 @@ class NuScenesConverter:
 
         # --- Setup map files and update map record ---
         self._setup_map_files()
+
+        # Backfill sample anns + data fields now that all tables exist
+        self._backfill_sample_fields()
 
         # Create tables dictionary AFTER map setup to capture updated map record
         tables = {

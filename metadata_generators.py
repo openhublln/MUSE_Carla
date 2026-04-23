@@ -41,23 +41,24 @@ class MetadataGenerators:
                 self.converter.attribute_name_to_token[attr["name"]] = token
         
     def generate_visibility_entries(self):
-        """Generate the fixed set of visibility entries for the dataset."""
+        """Generate the fixed set of visibility entries for the dataset.
+        
+        Uses string integer tokens ("1"–"4") and level strings matching real NuScenes v1.0-mini:
+          "1" -> "v0-40",  "2" -> "v40-60",  "3" -> "v60-80",  "4" -> "v80-100"
+        """
         visibility_levels = [
-            ("v0", "0-40%"),
-            ("v1", "40-60%"),
-            ("v2", "60-80%"),
-            ("v3", "80-100%")
+            ("1", "v0-40",   "visibility of whole object is between 0 and 40%"),
+            ("2", "v40-60",  "visibility of whole object is between 40 and 60%"),
+            ("3", "v60-80",  "visibility of whole object is between 60 and 80%"),
+            ("4", "v80-100", "visibility of whole object is between 80 and 100%"),
         ]
         self.converter.visibilities = []
-        # Generate entries for each level
-        for level, description in visibility_levels:
-            token = generate_token()
+        for token, level, description in visibility_levels:
             visibility_entry = {
                 "token": token,
                 "level": level,
                 "description": description
             }
             self.converter.visibilities.append(visibility_entry)
-            
-            # Store token for later use
-            self.converter.token_maps['visibility'][level] = token 
+            # Store token keyed by level string for annotation_generator lookup
+            self.converter.token_maps['visibility'][level] = token

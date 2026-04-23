@@ -21,14 +21,15 @@ class AnnotationGenerator:
             return "vehicle.stopped"
 
     def _get_visibility_level(self, visibility: float) -> str:
+        """Return level string matching token_maps['visibility'] keys (v0-40 … v80-100)."""
         if visibility < 40:
-            return "v0"
+            return "v0-40"
         elif visibility < 60:
-            return "v1"
+            return "v40-60"
         elif visibility < 80:
-            return "v2"
+            return "v60-80"
         else:
-            return "v3"
+            return "v80-100"
 
     def _count_total_cameras(self, scene_folder: str) -> int:
         scene_path = self.converter.input_base / scene_folder

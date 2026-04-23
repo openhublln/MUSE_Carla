@@ -26,6 +26,72 @@ class SampleDataGenerator:
         # Verbose gate to throttle per-file prints
         self.verbose = bool(perf_cfg.get("verbose", False))
 
+    def ensure_ego_poses_for_scene_sample_data(self, scene_folder: str):
+        """Guarantee every sample_data timestamp in this scene has an ego_pose entry.
+        
+        After generate_sample_data_entries() runs, any sample_data whose timestamp is
+        absent from ego_pose/*.json (off-by-one tick races, rounding, etc.) would
+        produce an empty ego_pose_token and fail NuScenes validation.
+        
+        Strategy: collect all sample_data timestamps for this scene, find those
+        missing an ego_pose, then interpolate (or duplicate nearest) from existing
+        ego_poses recorded for the same scene.
+        """
+        # Gather existing ego_pose entries for this scene
+        scene_ep_map = {}  # timestamp -> ego_pose entry
+        for ep in self.converter.ego_poses:
+            key = (scene_folder, ep['timestamp'])
+            if key in self.converter.token_maps.get('ego_pose', {}):
+                scene_ep_map[ep['timestamp']] = ep
+
+        if not scene_ep_map:
+            return  # Nothing to interpolate from
+
+        sorted_ep_ts = sorted(scene_ep_map.keys())
+
+        # Collect all sample_data timestamps for this scene (via sample_token linkage)
+        scene_sample_tokens = {s['token'] for s in self.converter.samples
+                               if s.get('scene_token') == self.converter.token_maps['scene'].get(scene_folder)}
+
+        missing_timestamps = set()
+        for sd in self.converter.sample_data:
+            if sd.get('sample_token') not in scene_sample_tokens:
+                continue
+            ts = sd['timestamp']
+            if (scene_folder, ts) not in self.converter.token_maps.get('ego_pose', {}):
+                missing_timestamps.add(ts)
+
+        for ts in missing_timestamps:
+            # Find nearest existing ego_pose timestamp
+            idx = bisect_left(sorted_ep_ts, ts)
+            if idx == 0:
+                nearest_ts = sorted_ep_ts[0]
+            elif idx >= len(sorted_ep_ts):
+                nearest_ts = sorted_ep_ts[-1]
+            else:
+                before, after = sorted_ep_ts[idx - 1], sorted_ep_ts[idx]
+                nearest_ts = before if (ts - before) <= (after - ts) else after
+
+            nearest_ep = scene_ep_map[nearest_ts]
+            token = generate_token()
+            new_ep = {
+                "token": token,
+                "timestamp": ts,
+                "translation": list(nearest_ep['translation']),
+                "rotation": list(nearest_ep['rotation']),
+            }
+            self.converter.ego_poses.append(new_ep)
+            self.converter.token_maps['ego_pose'][(scene_folder, ts)] = token
+            scene_ep_map[ts] = new_ep
+
+        # Patch empty ego_pose_token in sample_data entries for this scene
+        ep_token_map = self.converter.token_maps.get('ego_pose', {})
+        for sd in self.converter.sample_data:
+            if sd.get('sample_token') not in scene_sample_tokens:
+                continue
+            if not sd.get('ego_pose_token'):
+                sd['ego_pose_token'] = ep_token_map.get((scene_folder, sd['timestamp']), "")
+
     def generate_ego_poses_for_scene(self, scene_folder: str):
         """Generate ego poses for a scene. This is called before annotation generation."""
         scene_path = self.converter.input_base / scene_folder
@@ -182,13 +248,13 @@ class SampleDataGenerator:
                 height = int(float(sensor.get("attributes", {}).get("image_size_y", 0)))
             elif sensor_type == "lidar":
                 ext = ".npy"
-                fileformat = "bin"  # Use .bin for LIDAR in nuScenes
+                fileformat = "pcd.bin"  # NuScenes uses .pcd.bin for LIDAR
             elif sensor_type == "radar":
                 ext = ".npy"
-                fileformat = "pcd"  # Use .pcd for RADAR in nuScenes
+                fileformat = "pcd"
             elif sensor_type == "semantic_lidar":
                 ext = ".npy"
-                fileformat = "bin"  # Use .bin for semantic LIDAR
+                fileformat = "pcd.bin"
             elif sensor_type in ("imu", "gnss"):
                 ext = ".json"
                 fileformat = "json"
@@ -198,10 +264,6 @@ class SampleDataGenerator:
             files = sorted([f for f in current_sensor_folder.glob(f"*{ext}") if f.is_file()])
             if not files:
                 continue
-
-            # Create target directory for this sensor
-            target_dir = self.converter.output_base / f"samples/{channel}"
-            target_dir.mkdir(parents=True, exist_ok=True)
 
             def _process_one(file_path: Path):
                 try:
@@ -219,22 +281,32 @@ class SampleDataGenerator:
                         return None
                     sample_token_local = sample_timestamps[closest_keyframe_ts]
 
+                    # Determine keyframe status and routing folder (samples vs sweeps)
                     is_key_frame_local = timestamp_local in keyframe_timestamps
-                    ego_pose_token_local = ego_pose_timestamps.get(timestamp_local, "")
+                    routing = "samples" if is_key_frame_local else "sweeps"
 
-                    # Output filename
+                    # NuScenes filename format: <logfile>__<CHANNEL>__<timestamp_us>.<ext>
+                    # timestamps are stored in ms → convert to µs (* 1000)
+                    logfile = self.converter.logs[0].get("logfile", "") if self.converter.logs else ""
+                    timestamp_us = timestamp_local * 1000
+
                     if sensor_type == "camera":
-                        filename_local = f"samples/{channel}/{timestamp_local}.jpg"
+                        out_filename = f"{logfile}__{channel}__{timestamp_us}.jpg"
                     elif sensor_type == "lidar":
-                        filename_local = f"samples/{channel}/{timestamp_local}.bin"
+                        out_filename = f"{logfile}__{channel}__{timestamp_us}.pcd.bin"
                     elif sensor_type == "radar":
-                        filename_local = f"samples/{channel}/{timestamp_local}.pcd"
+                        out_filename = f"{logfile}__{channel}__{timestamp_us}.pcd"
                     elif sensor_type == "semantic_lidar":
-                        filename_local = f"samples/{channel}/{timestamp_local}.bin"
+                        out_filename = f"{logfile}__{channel}__{timestamp_us}.pcd.bin"
                     else:
-                        filename_local = f"samples/{channel}/{timestamp_local}{ext}"
+                        out_filename = f"{logfile}__{channel}__{timestamp_us}{ext}"
 
-                    target_file_local = target_dir / filename_local.split('/')[-1]
+                    filename_local = f"{routing}/{channel}/{out_filename}"
+                    target_dir_local = self.converter.output_base / routing / channel
+                    target_dir_local.mkdir(parents=True, exist_ok=True)
+                    target_file_local = target_dir_local / out_filename
+
+                    ego_pose_token_local = ego_pose_timestamps.get(timestamp_local, "")
 
                     # Convert/copy
                     if sensor_type == "camera":
@@ -268,9 +340,9 @@ class SampleDataGenerator:
                             f.write(b"# .PCD v0.7 - Point Cloud Data file format\n")
                             f.write(b"VERSION 0.7\n")
                             f.write(b"FIELDS x y z dyn_prop id rcs vx vy vx_comp vy_comp is_quality_valid ambig_state x_rms y_rms invalid_state pdh0 vx_rms vy_rms\n")
-                            f.write(b"SIZES 4 4 4 1 2 4 4 4 4 4 1 1 1 1 1 1 1 1\n")
-                            f.write(b"TYPES F F F I I F F F F F I I I I I I I I\n")
-                            f.write(b"COUNTS 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1\n")
+                            f.write(b"SIZE 4 4 4 1 2 4 4 4 4 4 1 1 1 1 1 1 1 1\n")
+                            f.write(b"TYPE F F F I I F F F F F I I I I I I I I\n")
+                            f.write(b"COUNT 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1\n")
                             f.write(f"WIDTH {points.shape[0]}\n".encode())
                             f.write(b"HEIGHT 1\n")
                             f.write(b"VIEWPOINT 0 0 0 1 0 0 0\n")
