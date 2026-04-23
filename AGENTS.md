@@ -38,21 +38,26 @@ pip install "numpy>=1.24.4,<2.0" opencv-python PyYAML pygame matplotlib PyQt6 Pi
 
 CARLA server must be running on `localhost:2000` before collection.
 
-**Linux — Launch CARLA:** `config_editor.py` "Launch CARLA" button tries GUI terminals (`tilix`, `gnome-terminal`, etc.) and falls back to a detached background process if all fail. Output logged to `<CARLA_root>/carla_launch.log`. Monitor with `tail -f`.
+**Linux — Launch CARLA:** `config_editor.py` "Launch CARLA" button tries GUI terminals (`tilix`, `gnome-terminal`, `xterm`, `konsole`, `xfce4-terminal`) and falls back to a detached background process if all fail. Output logged to `<CARLA_root>/carla_launch.log`. Monitor with `tail -f`.
 
 ---
 
 ## Architecture
 
 - **`config.yml`** — single source of truth for collection. Loaded fresh at the top of every script.
-- **`converter_config.yml`** — config for the NuScenes converter (`carla_to_nuscene_converter.py`). Separate from `config.yml`.
+- **`converter_config.yml`** — config for the NuScenes converter. Separate from `config.yml`.
 - **`sensor_processing.py`** auto-injects a paired `instance_<name>` camera for every RGB camera (`blueprint: sensor.camera.rgb`) with `collect_bbox: true`. Only RGB cameras qualify — semantic cameras are not paired.
-- **Synchronous CARLA mode** is mandatory. Tick rate is `simulation.frequency_hz` from `config.yml` (default 20 Hz if absent). All sensors tick together via `queue.Queue`.
-- **`run_simulation()` in `simulation_logic.py` is not called by the pipeline** — only `create_scene_folders()` from that module is used. The tick loop is inline in `multi_sensor_collection.py`.
+- **Synchronous CARLA mode** is mandatory. Tick rate is `simulation.frequency_hz` from `config.yml`. The committed `config.yml` sets this to **2 Hz** — not 20. All sensors tick together via `queue.Queue`.
+- **`run_simulation()` in `simulation_logic.py` is not called by the pipeline** — only `create_scene_folders()` from that module is used. The tick loop is inline in `multi_sensor_collection.py`. `simulation_logic.py` also contains French comments.
 - **Annotation** runs after all scenes complete, not interleaved.
 - **Map mask generation** (`generate_map_mask.py`) runs as a subprocess in the `finally` block of `multi_sensor_collection.py` after all scenes, with a 10-minute timeout.
 - **`clean_scene_data()`** removes files whose timestamps are absent from any sensor folder. Skips folders whose path contains `"instance"`.
-- `sensor_processing.py` reads `config.yml` inside the sensor callback on every image frame (I/O-per-frame).
+- `sensor_processing.py` reads `config.yml` inside the sensor callback on **every image frame** — significant I/O overhead at high frequency.
+
+### GUI support modules (imported by `config_editor.py`)
+- **`sensor_tab.py`** — sensor presets with exact default transform values; Camera_BackRight/BackLeft use unusual yaw values (`-225`, `225`).
+- **`sensor_widgets.py`** — `get_config()` lowercases and underscores the sensor type (e.g. `"Semantic LIDAR"` → `"semantic_lidar"`). `collect_bbox` is only emitted for `"Camera"` (RGB) type. Note: `noise_gyro_stddev_y` widget label reads `"Accel StdDev Y"` (copy-paste bug — it is a gyro field).
+- **`simulation_tab.py`** — GUI defaults differ from `config.yml`: `num_vehicles=30`, `num_pedestrians=10`, `frequency_hz=20`, `num_scenes=1`, `seconds_per_scene=20`. Seed is never exposed in the GUI; always writes `seed: None`.
 
 ---
 
@@ -103,11 +108,11 @@ Reads `_out/`, writes to `nuscenes_format/`.
 carla_to_nuscene_converter.py
     ├── nuscene_utils.py               # pure coord-transform utils; requires scipy + carla
     ├── sensor_calibrated_generators.py  # writes sensor.json + calibrated_sensor.json early
-    ├── log_generator.py               # reads _out/log_info.json
+    ├── log_generator.py               # reads _out/log_info.json; hardcodes date "2024-01-01"
     ├── metadata_generators.py         # category / attribute / visibility tables
     ├── instance_generator.py          # reads *_3dbbox.json; first-seen category wins per actor
-    ├── sample_generator.py            # keyframe selection (keyframe_rate=20.0 keeps all frames)
-    ├── sample_data_generator.py       # converts files; ThreadPoolExecutor(max_workers=5)
+    ├── sample_generator.py            # keyframe selection; rate from converter_config.yml (default 2)
+    ├── sample_data_generator.py       # converts files; ThreadPoolExecutor workers from converter_config.yml
     ├── annotation_generator.py        # reads *_3dbbox.json + LiDAR/radar .npy
     └── nuscenes_fixes.py              # post-processing: intrinsics, LiDAR quality, map paths
 ```
@@ -122,7 +127,12 @@ carla_to_nuscene_converter.py
 
 **`semantic_lidar` is silently skipped** during conversion (commented out in `converter_config.yml` sensor_mappings).
 
-**Coordinate system:** CARLA (Y-right) → NuScenes (Y-left) via Y-negation throughout. Camera-specific quaternion conversion exists in `nuscene_utils.py` but is currently not used — all sensors use `carla_rotation_to_nuscenes_quaternion()`.
+**Coordinate system:** CARLA (Y-right) → NuScenes (Y-left) via Y-negation throughout. A camera-specific quaternion conversion exists in `nuscene_utils.py` but is currently unused — all sensors go through `carla_rotation_to_nuscenes_quaternion()`.
+
+**`metadata_generators.py` quirks:**
+- Category description is hardcoded as `"A car"` for `vehicle.car`, empty string for all others (TODO in code).
+- Visibility tokens are fixed strings `"1"`–`"4"` (not UUIDs), matching NuScenes v1.0-mini format.
+- `nuscenes_fixes.py` hardcodes `version_dir = 'v1.0'`.
 
 ---
 
@@ -137,13 +147,16 @@ carla_to_nuscene_converter.py
 - Traffic spawn weights: 70% car, 10% truck, 10% bus, 5% motorcycle, 5% bicycle
 - Map mask: captured at 400 m altitude, `medium` resolution (2048px), `--target-resolution 0.1`
 - `change_map.py` hardcodes `fixed_delta_seconds = 0.05` regardless of `config.yml`
+- `log_generator.py` hardcodes `logfile="carla_simulation_log"`, `vehicle="carla_ego_vehicle"`, `date="2024-01-01"`
+- `sample_data_generator.py` `max_workers` comes from `converter_config.yml → performance.max_workers` (defaults to `min(32, cpu_count*2)`); there is no hardcoded `5`
 
 ---
 
 ## `config_editor.py` — Linux Notes
 
-- "Launch CARLA" is Linux/Windows compatible. On Linux, tries `tilix` → `gnome-terminal` → `xterm` → `konsole` → `xfce4-terminal` (each with 1s poll check). Falls back to detached background process if all fail.
+- "Launch CARLA" is Linux/Windows compatible. On Linux, tries `tilix` → `gnome-terminal` → `xterm` → `konsole` → `xfce4-terminal` (each with 1 s poll check). Falls back to detached background process if all fail.
 - `parents[3]` from the script path resolves to CARLA root (`<CARLA_root>/PythonAPI/muse/MUSE_Carla/config_editor.py` → 4 levels up).
+- The "Run Simulation" button calls `process.communicate()` — **the UI blocks until the simulation subprocess exits**.
 - Requires `libxcb-cursor0`: `sudo apt-get install -y libxcb-cursor0`.
 
 ---

@@ -10,25 +10,31 @@ def setup_traffic(client, world, traffic_config):
 
         # --- Build category-specific blueprint pools with robust base_type detection ---
         def get_base_type(bp):
-            # Prefer explicit attribute when available
+            # Prefer explicit attribute when available (non-empty string only)
             try:
                 if bp.has_attribute('base_type'):
                     attr = bp.get_attribute('base_type')
-                    return attr.as_string() if hasattr(attr, 'as_string') else str(attr)
+                    val = attr.as_string() if hasattr(attr, 'as_string') else str(attr)
+                    if val.strip():
+                        return val.strip()
             except Exception:
                 pass
-            # Fallback: infer from id
+            # Fallback: infer from blueprint id
+            # Note: CARLA 0.10.0 has no motorcycle/bicycle blueprints — pools will be empty.
             bp_id = getattr(bp, 'id', '').lower()
             if '.truck' in bp_id: return 'truck'
             if '.bus' in bp_id: return 'bus'
+            if 'sprinter' in bp_id or 'ambulance' in bp_id or 'firetruck' in bp_id: return 'truck'
             if '.motorcycle' in bp_id or '.bike' in bp_id: return 'motorcycle' if '.motorcycle' in bp_id else 'bicycle'
             if '.bicycle' in bp_id: return 'bicycle'
-            if bp_id.startswith('vehicle.'): return 'car'  # default vehicle type
+            if bp_id.startswith('vehicle.'): return 'car'  # catch-all
             return None
 
         cars, trucks, buses, motos, bicycles = [], [], [], [], []
+        print("\n--- Blueprint classification debug ---")
         for bp in blueprints:
             bt = get_base_type(bp)
+            print(f"  {bp.id:55s} -> {bt}")
             if bt == 'car':
                 cars.append(bp)
             elif bt == 'truck':
@@ -39,6 +45,8 @@ def setup_traffic(client, world, traffic_config):
                 motos.append(bp)
             elif bt == 'bicycle':
                 bicycles.append(bp)
+        print(f"  TOTALS: cars={len(cars)} trucks={len(trucks)} buses={len(buses)} motorcycles={len(motos)} bicycles={len(bicycles)}")
+        print("--- End blueprint debug ---\n")
 
         # Weighted category selection favoring cars
         category_pools = {
@@ -48,13 +56,13 @@ def setup_traffic(client, world, traffic_config):
             'motorcycle': motos,
             'bicycle': bicycles,
         }
-        # Keep simple: mainly cars, some trucks/buses, few two-wheelers
+        # CARLA 0.10.0 has no motorcycle or bicycle blueprints — only car, truck, bus exist.
         category_weights = {
             'car': 0.7,
-            'truck': 0.1,
+            'truck': 0.2,
             'bus': 0.1,
-            'motorcycle': 0.05,
-            'bicycle': 0.05,
+            'motorcycle': 0.0,
+            'bicycle': 0.0,
         }
         available_categories = [c for c, pool in category_pools.items() if len(pool) > 0]
         if not available_categories:

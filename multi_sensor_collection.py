@@ -12,7 +12,7 @@ from bounding_box_export import export_3d_bboxes
 from traffic_setup import setup_traffic, spawn_ego_vehicle
 from sensor_processing import process_sensor_config, sensor_callback, clean_scene_data
 from simulation_logic import run_simulation, create_scene_folders
-from generate_bbox_annotations import process_scene
+# from generate_bbox_annotations import process_scene  # 2D bbox disabled
 
 EGO_POSE_FOLDER = "ego_pose"
 LOG_INFO_FILENAME = "log_info.json"
@@ -191,38 +191,9 @@ def main():
         for scene_id in range(1, num_scenes + 1):
             scene_completed = False
             max_scene_retries = 3  # Maximum number of retries per scene
-
+            
             for scene_retry in range(max_scene_retries):
-                sensor_list = []
-                vehicle = None
                 try:
-                    # --- Reload world between scenes to prevent memory accumulation ---
-                    # Skip reload before the very first scene (world already loaded).
-                    if scene_id > 1 or scene_retry > 0:
-                        print(f"\nReloading CARLA world to free server memory...")
-                        # Disable sync mode BEFORE reload so the server doesn't hang
-                        try:
-                            s = world.get_settings()
-                            s.synchronous_mode = False
-                            world.apply_settings(s)
-                        except Exception:
-                            pass
-                        world = client.reload_world()
-                        # Re-apply synchronous mode on the fresh world
-                        settings = world.get_settings()
-                        settings.synchronous_mode = True
-                        settings.fixed_delta_seconds = 1.0 / float(frequency_hz)
-                        world.apply_settings(settings)
-                        traffic_manager = client.get_trafficmanager(8000)
-                        traffic_manager.set_synchronous_mode(True)
-                        # Re-spawn traffic on the clean world
-                        print("Re-spawning traffic on reloaded world...")
-                        vehicle_list = setup_traffic(client, world, traffic_config)
-                        settle_ticks = max(1, int(round(2.5 * frequency_hz)))
-                        for _ in range(settle_ticks):
-                            world.tick()
-                        print("World reloaded and traffic settled.")
-
                     # Create folders and sensor queue
                     sensor_names = [s["name"] for s in sensors_config]
                     save_path = create_scene_folders(scene_id, sensor_names, base_save_path)
@@ -258,6 +229,7 @@ def main():
                     ego_pose_dir = os.path.join(save_path, EGO_POSE_FOLDER)
 
                     # Setup sensors and run simulation
+                    sensor_list = []
                     for sensor in sensors_config:
                         bp_sensor = blueprint_library.find(sensor["blueprint"])
                         for attr, value in sensor["attributes"].items():
@@ -270,20 +242,23 @@ def main():
                         )
                         actor = world.spawn_actor(bp_sensor, transform, attach_to=vehicle)
                         sensor_list.append(actor)
-                        actor.listen(lambda data, q=sensor_queue, name=sensor["name"],
+                        actor.listen(lambda data, q=sensor_queue, name=sensor["name"], 
                                     path=save_path, w=world, v=vehicle, s=actor:
                                     sensor_callback(data, q, name, path, w, v, s))
 
                     # Run simulation and collect ego pose at each tick
                     print(f"\nStarting data collection for scene {scene_id}...")
                     print(f"Expected frames: {ticks_per_scene} ({frequency_hz}Hz for {seconds_per_scene} seconds)")
-
+                    
                     for tick in range(ticks_per_scene):
                         world.tick()
                         snapshot = world.get_snapshot()
                         timestamp = int(snapshot.timestamp.elapsed_seconds * 1000)
                         save_ego_pose(vehicle, timestamp, ego_pose_dir)
-
+                        
+                        # Add a small delay between ticks to ensure sensor callbacks complete
+                        time.sleep(0.01)  # 10ms delay between ticks
+                        
                         if tick % 10 == 0:  # Progress update every 10 frames
                             print(f"Collected {tick + 1}/{ticks_per_scene} frames")
 
@@ -292,25 +267,26 @@ def main():
                     expected_calls = len(sensor_list) * ticks_per_scene
                     completed_calls = 0
                     timeout_counter = 0
-                    max_timeouts = 10
-
+                    max_timeouts = 10  # Increased max timeouts
+                    
                     while completed_calls < expected_calls and timeout_counter < max_timeouts:
                         try:
-                            sensor_queue.get(timeout=5.0)
-                            completed_calls += 1
-                            if completed_calls % 100 == 0:
-                                print(f"Completed {completed_calls}/{expected_calls} sensor callbacks")
+                            timestamp, sensor_name = sensor_queue.get(timeout=5.0)  # Increased timeout
+                            if timestamp > 0:  # Valid timestamp
+                                completed_calls += 1
+                                if completed_calls % 100 == 0:  # Progress update every 100 calls
+                                    print(f"Completed {completed_calls}/{expected_calls} sensor callbacks")
                         except Empty:
                             timeout_counter += 1
-                            print(f"Warning: Timeout {timeout_counter}/{max_timeouts} waiting for sensor callback. "
-                                  f"Completed {completed_calls}/{expected_calls}")
+                            print(f"Warning: Timeout {timeout_counter}/{max_timeouts} waiting for sensor callback. Completed {completed_calls}/{expected_calls}")
                             if timeout_counter >= max_timeouts:
                                 print("Max timeouts reached, proceeding with cleanup")
                                 break
 
+                    # Add a longer delay before cleanup to ensure all file operations are complete
                     print("Waiting for file operations to complete...")
-                    time.sleep(3.0)
-
+                    time.sleep(5.0)  # Increased wait time
+                    
                     scene_completed = True
                     break  # Scene completed successfully, exit retry loop
 
@@ -318,36 +294,33 @@ def main():
                     print(f"Error during scene {scene_id}: {e}")
                     if scene_retry < max_scene_retries - 1:
                         print("Retrying scene...")
+                        continue
                     else:
                         print("Max retries reached, skipping scene")
                 finally:
-                    # Destroy sensors first (stop callbacks), then vehicle
-                    # Tick once after stopping each sensor to let CARLA process the destroy
-                    print("Cleaning up scene actors...")
-                    for sensor in sensor_list:
+                    # Add a longer delay before cleanup to allow pending operations
+                    print("Waiting before cleanup...")
+                    time.sleep(5.0)  # Increased wait time
+                    
+                    # Cleanup if needed
+                    if 'vehicle' in locals() and vehicle is not None:
                         try:
-                            sensor.stop()
-                            sensor.destroy()
-                        except Exception:
-                            pass
-                    # Tick to flush pending sensor data
-                    try:
-                        for _ in range(3):
-                            world.tick()
-                    except Exception:
-                        pass
-                    if vehicle is not None:
-                        try:
+                            vehicle.get_transform()  # Check if vehicle is still alive
                             vehicle.destroy()
                         except Exception:
                             print("Vehicle already destroyed")
-                    # Final tick after vehicle destroy
-                    try:
-                        for _ in range(3):
-                            world.tick()
-                    except Exception:
-                        pass
-                    print("Scene cleanup done.")
+                            
+                    if 'sensor_list' in locals():
+                        for sensor in sensor_list:
+                            try:
+                                sensor.get_transform()  # Check if sensor is still alive
+                                sensor.destroy()
+                            except Exception:
+                                print(f"Sensor {sensor.type_id} already destroyed")
+                    
+                    # Add another delay after cleanup
+                    print("Waiting after cleanup...")
+                    time.sleep(5.0)  # Increased wait time
 
             if not scene_completed:
                 print(f"Failed to complete scene {scene_id} after {max_scene_retries} attempts")
@@ -359,11 +332,10 @@ def main():
             clean_scene_data(path, sensors_for_cleanup)
         print("Toutes les scènes ont été nettoyées avec succès !")
         
-        # Generate bounding box annotations
-        print("\nGenerating bounding box annotations...")
-        for path in scene_paths:
-            process_scene(path)
-        print("Bounding box annotation generation complete!")
+        # 2D bounding box annotation generation disabled (generate_bbox_annotations.py)
+        # Bicycle (CARLA tag 19) was not included; re-enable and fix tag list if 2D bboxes are needed.
+        # for path in scene_paths:
+        #     process_scene(path)
     
     except KeyboardInterrupt:
         print(" - Interrompu par l'utilisateur.")
@@ -371,15 +343,7 @@ def main():
         print(f"Erreur lors de l'initialisation: {e}")
 
     finally:
-        # Disable synchronous mode before exiting so CARLA server stays usable
-        try:
-            s = world.get_settings()
-            s.synchronous_mode = False
-            world.apply_settings(s)
-        except Exception:
-            pass
-
-        # Destroy remaining traffic actors (last scene's vehicles; reloaded scenes are already clean)
+        # Clean up traffic first
         print('\nDestroying traffic...')
         try:
             client.apply_batch([carla.command.DestroyActor(x) for x in vehicle_list])

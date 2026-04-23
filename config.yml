@@ -1,7 +1,7 @@
 simulation:
   num_scenes: 2
   seconds_per_scene: 20
-  frequency_hz: 10
+  frequency_hz: 2
   base_save_path: ./_out
   traffic:
     num_vehicles: 50
@@ -26,7 +26,7 @@ sensors:
       pitch: 0.0
       yaw: 0.0
       roll: 0.0
-  collect_bbox: true
+  collect_bbox: false
 - name: Camera_Back
   type: camera
   blueprint: sensor.camera.rgb
@@ -43,7 +43,7 @@ sensors:
       pitch: 0.0
       yaw: 180.0
       roll: 0.0
-  collect_bbox: true
+  collect_bbox: false
 - name: Camera_FrontRight
   type: camera
   blueprint: sensor.camera.rgb
@@ -60,7 +60,7 @@ sensors:
       pitch: 0.0
       yaw: 45.0
       roll: 0.0
-  collect_bbox: true
+  collect_bbox: false
 - name: Camera_FrontLeft
   type: camera
   blueprint: sensor.camera.rgb
@@ -77,7 +77,7 @@ sensors:
       pitch: 0.0
       yaw: -45.0
       roll: 0.0
-  collect_bbox: true
+  collect_bbox: false
 - name: Camera_BackRight
   type: camera
   blueprint: sensor.camera.rgb
@@ -94,7 +94,7 @@ sensors:
       pitch: 0.0
       yaw: -225.0
       roll: 0.0
-  collect_bbox: true
+  collect_bbox: false
 - name: Camera_BackLeft
   type: camera
   blueprint: sensor.camera.rgb
@@ -111,7 +111,7 @@ sensors:
       pitch: 0.0
       yaw: 225.0
       roll: 0.0
-  collect_bbox: true
+  collect_bbox: false
 - name: Radar_Front
   type: radar
   blueprint: sensor.other.radar
