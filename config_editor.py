@@ -43,16 +43,19 @@ class MainWindow(QMainWindow):
         save_btn = QPushButton("Save Configuration")
         run_btn = QPushButton("Run Simulation")
         visualize_btn = QPushButton("Visualize Simulation")
+        convert_nuscene_btn = QPushButton("Convert to NuScenes")
         
         launch_btn.clicked.connect(self.launch_carla)
         save_btn.clicked.connect(self.save_config)
         run_btn.clicked.connect(self.run_simulation)
         visualize_btn.clicked.connect(self.visualize_simulation)
+        convert_nuscene_btn.clicked.connect(self.convert_to_nuscene)
         
         button_layout.addWidget(launch_btn)
         button_layout.addWidget(save_btn)
         button_layout.addWidget(run_btn)
         button_layout.addWidget(visualize_btn)
+        button_layout.addWidget(convert_nuscene_btn)
         
         # Add widgets to layout
         left_panel = QWidget()
@@ -154,7 +157,9 @@ class MainWindow(QMainWindow):
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
-                universal_newlines=True
+                universal_newlines=True,
+                encoding="utf-8",
+                errors="replace"
             )
             
             # Show a more informative dialog
@@ -262,37 +267,152 @@ class MainWindow(QMainWindow):
             )
     
     def launch_carla(self):
-        """Launch CARLA server using relative path"""
+        """Launch CARLA server using relative path (Linux/Windows compatible)"""
         try:
             # Get the path to CARLA by going up from current directory
             current_dir = Path(os.path.abspath(__file__))  # Get path to current script
-            carla_root = current_dir.parents[2]  # Go up 3 levels to CARLA root
-            carla_exe = carla_root / "CarlaUnreal.exe"
-            
-            if not carla_exe.exists():
-                raise FileNotFoundError(f"CARLA executable not found at: {carla_exe}")
-            
-            # Launch CARLA in a new process
-            subprocess.Popen(
-                str(carla_exe),
-                cwd=str(carla_root),
-                creationflags=subprocess.CREATE_NEW_CONSOLE
-            )
-            
+            carla_root = current_dir.parents[3]  # Go up 4 levels to CARLA root
+
+            if sys.platform == "win32":
+                carla_exe = carla_root / "CarlaUnreal.exe"
+                if not carla_exe.exists():
+                    raise FileNotFoundError(f"CARLA executable not found at: {carla_exe}")
+                subprocess.Popen(
+                    str(carla_exe),
+                    cwd=str(carla_root),
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+            else:
+                # Linux: prefer the shell launcher, fall back to bare binary
+                carla_sh = carla_root / "CarlaUnreal.sh"
+                carla_bin = carla_root / "CarlaUnreal"
+                if carla_sh.exists():
+                    carla_exe = carla_sh
+                elif carla_bin.exists():
+                    carla_exe = carla_bin
+                else:
+                    raise FileNotFoundError(
+                        f"CARLA executable not found at: {carla_sh} or {carla_bin}"
+                    )
+
+                # Try to open in a new terminal window; fall back to background process
+                log_file = carla_root / "carla_launch.log"
+                terminal_cmds = [
+                    ["tilix", "-e",
+                     f"bash -c '{carla_exe}; exec bash'"],
+                    ["gnome-terminal", "--disable-factory", "--", "bash", "-c",
+                     f"{carla_exe}; exec bash"],
+                    ["xterm", "-e", f"{carla_exe}"],
+                    ["konsole", "--noclose", "-e", f"{carla_exe}"],
+                    ["xfce4-terminal", "--hold", "-e", f"{carla_exe}"],
+                ]
+                launched = False
+                for cmd in terminal_cmds:
+                    try:
+                        ret = subprocess.Popen(
+                            cmd, cwd=str(carla_root),
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL
+                        )
+                        # Give it 1 second and check it didn't immediately die
+                        import time
+                        time.sleep(1)
+                        if ret.poll() is None:
+                            launched = True
+                            break
+                    except FileNotFoundError:
+                        continue
+
+                if not launched:
+                    # All GUI terminals failed — launch detached, log to file
+                    with open(log_file, "w") as lf:
+                        subprocess.Popen(
+                            [str(carla_exe)],
+                            cwd=str(carla_root),
+                            stdout=lf,
+                            stderr=lf,
+                            start_new_session=True
+                        )
+
             # Show a message to wait for CARLA to start
             QMessageBox.information(
                 self,
                 "CARLA Starting",
-                "CARLA is starting...\n\n" +
-                "Please wait for the simulator to fully load before running the simulation."
+                "CARLA is starting...\n\n"
+                "Please wait for the simulator to fully load before running the simulation.\n\n"
+                "On Linux you can monitor the output with:\n"
+                f"  tail -f {carla_root}/carla_launch.log"
             )
-            
+
         except Exception as e:
             QMessageBox.critical(
                 self,
                 "Error",
                 f"Failed to launch CARLA: {str(e)}\n\n" +
                 "Please make sure CARLA is correctly installed."
+            )
+
+    def convert_to_nuscene(self):
+        """Run the CARLA to NuScenes conversion script."""
+        try:
+            converter_config_file_name = "converter_config.yml"
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            converter_config_path = os.path.join(current_dir, converter_config_file_name)
+
+            if not os.path.exists(converter_config_path):
+                QMessageBox.warning(
+                    self,
+                    "Converter Configuration Missing",
+                    f"{converter_config_file_name} not found in the script directory.\\n"
+                    "Please ensure the converter configuration file is present."
+                )
+                return
+
+            python_exe = sys.executable
+            
+            # Show starting message
+            QMessageBox.information(
+                self,
+                "Conversion Starting",
+                "Starting conversion to NuScenes format ...\n"
+                "This process may take some time. Please wait.\n"
+                "A notification will appear upon completion."
+            )
+            
+            process = subprocess.Popen(
+                [python_exe, "carla_to_nuscene_converter.py", converter_config_path],
+                cwd=current_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+                encoding="utf-8",
+                errors="replace"
+            )
+            
+            # Wait for the process to complete and get output
+            stdout, stderr = process.communicate()
+            
+            if process.returncode == 0:
+                QMessageBox.information(
+                    self,
+                    "Conversion Complete",
+                    "Data conversion to NuScenes format completed successfully!"
+                )
+            else:
+                QMessageBox.critical(
+                    self,
+                    "Conversion Failed",
+                    f"Data conversion to NuScenes format failed.\n\n"
+                    f"Error:\n{stderr}"
+                )
+                
+        except Exception as e:
+            QMessageBox.critical(
+                self, 
+                "Error", 
+                f"Failed to start or complete NuScenes conversion: {str(e)}"
             )
 
 def main():

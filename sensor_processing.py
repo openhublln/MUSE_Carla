@@ -41,6 +41,25 @@ def process_sensor_config(sensors_config):
 def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=None, ego_vehicle=None, sensor_actor=None):
     """ Callback pour traiter et enregistrer les données des capteurs """
     try:
+        # Check if any required actors are destroyed
+        if world is not None:
+            try:
+                world.get_actors()  # This will raise an exception if world is destroyed
+            except Exception:
+                raise RuntimeError("World is no longer alive")
+                
+        if ego_vehicle is not None:
+            try:
+                ego_vehicle.get_transform()  # This will raise an exception if vehicle is destroyed
+            except Exception:
+                raise RuntimeError("Ego vehicle is no longer alive")
+                
+        if sensor_actor is not None:
+            try:
+                sensor_actor.get_transform()  # This will raise an exception if sensor is destroyed
+            except Exception:
+                raise RuntimeError("Sensor actor is no longer alive")
+
         timestamp = int(sensor_data.timestamp * 1e3)
         sensor_folder = os.path.join(save_path, sensor_name)
 
@@ -96,7 +115,11 @@ def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=Non
             
             # New: Call export to write 3D bounding boxes (if sensor_actor provided)
             if sensor_actor is not None:
-                export_3d_bboxes(sensor_data, sensor_folder, world, ego_vehicle, sensor_actor)
+                try:
+                    sensor_actor.get_transform()  # Check if sensor is still alive
+                    export_3d_bboxes(sensor_data, sensor_folder, world, ego_vehicle, sensor_actor)
+                except Exception as e:
+                    print(f"Warning: Error exporting 3D bboxes for {sensor_name}: {e}")
 
         elif isinstance(sensor_data, carla.SemanticLidarMeasurement):
             lidar_filename = os.path.join(sensor_folder, f"{timestamp}.ply")
@@ -131,7 +154,7 @@ def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=Non
         sensor_queue.put((timestamp, sensor_name))
         
     except Exception as e:
-        print(f"Error in sensor callback: {e}")
+        print(f"Error in sensor callback for {sensor_name}: {e}")
         sensor_queue.put((0, sensor_name))  # Put dummy data to avoid blocking
 
 def clean_scene_data(scene_path, sensor_names):

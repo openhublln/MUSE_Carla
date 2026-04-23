@@ -7,8 +7,62 @@ def setup_traffic(client, world, traffic_config):
     try:
         # Get blueprints for vehicles and pedestrians
         blueprints = world.get_blueprint_library().filter('vehicle.*')
-        if traffic_config.get("safe_spawn", True):
-            blueprints = [x for x in blueprints if x.get_attribute('base_type') == 'car']
+
+        # --- Build category-specific blueprint pools with robust base_type detection ---
+        def get_base_type(bp):
+            # Prefer explicit attribute when available
+            try:
+                if bp.has_attribute('base_type'):
+                    attr = bp.get_attribute('base_type')
+                    return attr.as_string() if hasattr(attr, 'as_string') else str(attr)
+            except Exception:
+                pass
+            # Fallback: infer from id
+            bp_id = getattr(bp, 'id', '').lower()
+            if '.truck' in bp_id: return 'truck'
+            if '.bus' in bp_id: return 'bus'
+            if '.motorcycle' in bp_id or '.bike' in bp_id: return 'motorcycle' if '.motorcycle' in bp_id else 'bicycle'
+            if '.bicycle' in bp_id: return 'bicycle'
+            if bp_id.startswith('vehicle.'): return 'car'  # default vehicle type
+            return None
+
+        cars, trucks, buses, motos, bicycles = [], [], [], [], []
+        for bp in blueprints:
+            bt = get_base_type(bp)
+            if bt == 'car':
+                cars.append(bp)
+            elif bt == 'truck':
+                trucks.append(bp)
+            elif bt == 'bus':
+                buses.append(bp)
+            elif bt == 'motorcycle':
+                motos.append(bp)
+            elif bt == 'bicycle':
+                bicycles.append(bp)
+
+        # Weighted category selection favoring cars
+        category_pools = {
+            'car': cars,
+            'truck': trucks,
+            'bus': buses,
+            'motorcycle': motos,
+            'bicycle': bicycles,
+        }
+        # Keep simple: mainly cars, some trucks/buses, few two-wheelers
+        category_weights = {
+            'car': 0.7,
+            'truck': 0.1,
+            'bus': 0.1,
+            'motorcycle': 0.05,
+            'bicycle': 0.05,
+        }
+        available_categories = [c for c, pool in category_pools.items() if len(pool) > 0]
+        if not available_categories:
+            available_categories = ['car']
+            category_pools['car'] = list(blueprints)
+            category_weights['car'] = 1.0
+
+        # If safe_spawn requested, still keep to known types but already enforced by pools
         blueprintsWalkers = world.get_blueprint_library().filter('walker.pedestrian.*')
 
         # Get spawn points for vehicles
@@ -30,16 +84,46 @@ def setup_traffic(client, world, traffic_config):
         batch = []
         vehicle_list = []
         random.shuffle(spawn_points)
-        for n, transform in enumerate(spawn_points):
-            if n >= num_vehicles:
+
+        # Ensure at least one of each available category (car/truck/bus/motorcycle/bicycle), if possible
+        required_order = [c for c in ['car', 'truck', 'bus', 'motorcycle', 'bicycle'] if c in available_categories]
+        idx_sp = 0
+        for cat in required_order:
+            if idx_sp >= num_vehicles:
                 break
-            blueprint = random.choice(blueprints)
+            pool = category_pools.get(cat, [])
+            if not pool:
+                continue
+            transform = spawn_points[idx_sp]
+            idx_sp += 1
+            blueprint = random.choice(pool)
             if blueprint.has_attribute('color'):
                 color = random.choice(blueprint.get_attribute('color').recommended_values)
                 blueprint.set_attribute('color', color)
             blueprint.set_attribute('role_name', 'autopilot')
             batch.append(carla.command.SpawnActor(blueprint, transform)
                 .then(carla.command.SetAutopilot(carla.command.FutureActor, True)))
+
+        # Spawn remaining vehicles using weighted random selection
+        remaining = max(0, num_vehicles - idx_sp)
+        if remaining > 0:
+            weights = [category_weights[c] for c in available_categories]
+            s = sum(weights) or 1.0
+            weights = [w / s for w in weights]
+            for i in range(remaining):
+                transform = spawn_points[idx_sp]
+                idx_sp += 1
+                chosen_category = random.choices(available_categories, weights=weights, k=1)[0]
+                pool = category_pools.get(chosen_category, [])
+                if not pool:
+                    pool = category_pools.get('car', []) or list(blueprints)
+                blueprint = random.choice(pool)
+                if blueprint.has_attribute('color'):
+                    color = random.choice(blueprint.get_attribute('color').recommended_values)
+                    blueprint.set_attribute('color', color)
+                blueprint.set_attribute('role_name', 'autopilot')
+                batch.append(carla.command.SpawnActor(blueprint, transform)
+                    .then(carla.command.SetAutopilot(carla.command.FutureActor, True)))
 
         # Apply batch spawn for vehicles
         for response in client.apply_batch_sync(batch, True):

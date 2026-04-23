@@ -10,6 +10,7 @@ __pycache__/
 venv/
 env/
 carlavenv/
+.venv_nuscenes_py311/
 
 # IDE files
 .vscode/
@@ -19,5 +20,11 @@ carlavenv/
 .DS_Store
 Thumbs.db
 
-# Todo
+# Others
 todo.md
+.cursor
+nuscenes_format
+
+v1.0-mini
+
+

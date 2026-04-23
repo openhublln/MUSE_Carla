@@ -2,6 +2,52 @@ import os
 import json
 import numpy as np
 import carla 
+from shapely.geometry import Polygon, box
+
+# --- Simple in-file selector for which categories to export ---
+# Supported categories: vehicle.car, vehicle.truck, vehicle.bus, vehicle.motorcycle, vehicle.bicycle, human.pedestrian
+EXPORT_BBOX3D_CATEGORIES = {
+    "vehicle.car",
+    "vehicle.truck",
+    "vehicle.bus",
+    "vehicle.motorcycle",
+    "vehicle.bicycle",
+    "human.pedestrian",
+}
+
+# Distance and size thresholds
+MAX_DISTANCE_METERS = 50.0
+MIN_BOX_PX = 3
+
+# --- Actor category classification ---
+def classify_actor_category(actor: carla.Actor) -> str:
+    """Classify a CARLA actor into a simple category string compatible with NuScenes-style labels.
+
+    Returns one of: vehicle.car, vehicle.truck, vehicle.bus, vehicle.motorcycle, vehicle.bicycle, human.pedestrian
+    Returns None if category cannot be determined.
+    """
+    try:
+        type_id = getattr(actor, 'type_id', '') or ''
+    except Exception:
+        type_id = ''
+
+    if type_id.startswith('vehicle.'):
+        lower_id = type_id.lower()
+        if 'truck' in lower_id:
+            return 'vehicle.truck'
+        if 'bus' in lower_id:
+            return 'vehicle.bus'
+        if 'motorcycle' in lower_id or 'harley' in lower_id or 'yamaha' in lower_id:
+            return 'vehicle.motorcycle'
+        if 'bicycle' in lower_id or '.bike' in lower_id or 'crossbike' in lower_id:
+            return 'vehicle.bicycle'
+        # Default vehicle type
+        return 'vehicle.car'
+
+    if type_id.startswith('walker.pedestrian'):
+        return 'human.pedestrian'
+
+    return None
 
 # --- Liang-Barsky Line Clipping Algorithm ---
 def liang_barsky_clip(x1, y1, x2, y2, x_min, y_min, x_max, y_max):
@@ -62,6 +108,106 @@ def get_image_point(loc, K, w2c):
     point_img[1] /= point_img[2]
     return point_img[0:2], is_behind
 
+def compute_visibility(clipped_segments, bbox_from_clipped, image_width, image_height):
+    """
+    Compute the visibility percentage of a bounding box.
+    
+    Args:
+        clipped_segments: List of clipped line segments [[[x1,y1], [x2,y2]], ...]
+        bbox_from_clipped: [x_min, y_min, width, height] of the bounding box
+        image_width: Width of the image
+        image_height: Height of the image
+    
+    Returns:
+        float: Visibility percentage (0-100)
+    """
+    if not clipped_segments or not bbox_from_clipped:
+        print("No clipped segments or bbox provided")
+        return 0.0
+        
+    # Get bounding box parameters
+    x_min, y_min, width, height = bbox_from_clipped
+    
+    # Debug print
+    print(f"\nDebug - Bounding Box:")
+    print(f"Position: ({x_min}, {y_min})")
+    print(f"Size: {width}x{height}")
+    print(f"Number of segments: {len(clipped_segments)}")
+    
+    # Check if box is partially outside image
+    is_partially_outside = (
+        x_min < 0 or y_min < 0 or 
+        x_min + width > image_width or 
+        y_min + height > image_height
+    )
+    
+    try:
+        # Create a polygon from the clipped segments to get the actual visible area
+        points = []
+        for segment in clipped_segments:
+            points.extend(segment)
+        
+        if len(points) < 3:
+            print("Not enough points to form polygon")
+            return 0.0
+        
+        # Convert points to numpy array
+        points_array = np.array(points)
+        
+        # Find the point with the lowest y-coordinate (and leftmost if tied)
+        start_idx = np.lexsort((points_array[:, 0], points_array[:, 1]))[0]
+        start_point = points_array[start_idx]
+        
+        # Sort remaining points by angle with start point
+        remaining_points = np.delete(points_array, start_idx, axis=0)
+        angles = np.arctan2(remaining_points[:, 1] - start_point[1],
+                          remaining_points[:, 0] - start_point[0])
+        sorted_indices = np.argsort(angles)
+        sorted_points = remaining_points[sorted_indices]
+        
+        # Combine start point with sorted points
+        ordered_points = np.vstack((start_point, sorted_points))
+        
+        # Create polygon from ordered points
+        visible_polygon = Polygon(ordered_points)
+        
+        if not visible_polygon.is_valid:
+            print("Invalid polygon created from ordered points")
+            return 0.0
+        
+        # Calculate visible area
+        visible_area = visible_polygon.area
+        
+        # Calculate total area based on whether the box is truncated
+        if is_partially_outside:
+            # For truncated boxes, calculate the maximum possible visible area
+            # by intersecting the box with image boundaries
+            bbox_polygon = box(x_min, y_min, x_min + width, y_min + height)
+            image_polygon = box(0, 0, image_width, image_height)
+            max_visible_polygon = bbox_polygon.intersection(image_polygon)
+            total_area = max_visible_polygon.area
+        else:
+            # For non-truncated boxes, use the actual box area
+            total_area = width * height
+        
+        # Debug print
+        print(f"\nDebug - Visibility Calculation:")
+        print(f"Visible area: {visible_area}")
+        print(f"Total area: {total_area}")
+        
+        # Calculate visibility percentage
+        visibility = (visible_area / total_area) * 100
+        
+        # Clamp to 0-100 range
+        visibility = max(0.0, min(100.0, visibility))
+        
+        print(f"Final visibility: {visibility}%")
+        return visibility
+        
+    except Exception as e:
+        print(f"Error in visibility calculation: {e}")
+        return 0.0
+
 def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
     """
     Exports 3D bounding box edges projected and clipped onto the camera image
@@ -81,17 +227,23 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
 
     output_data = []
 
-    # Process ONLY Dynamic Vehicles accessible via get_actors()
-    vehicles = world.get_actors().filter('*vehicle*')
-    for actor in vehicles:
+    # Process selected dynamic actors: vehicles and pedestrians
+    vehicles = world.get_actors().filter('vehicle.*')
+    walkers = world.get_actors().filter('walker.pedestrian.*')
+    actors = list(vehicles) + list(walkers)
+    for actor in actors:
         if actor.id == ego_vehicle.id:
+            continue
+
+        category = classify_actor_category(actor)
+        if category is None or category not in EXPORT_BBOX3D_CATEGORIES:
             continue
 
         actor_transform = actor.get_transform()
         actor_loc = actor_transform.location
 
         # --- Basic Filters ---
-        if actor_loc.distance(ego_location) > 50:
+        if actor_loc.distance(ego_location) > MAX_DISTANCE_METERS:
             continue
         ray = actor_loc - sensor_loc
         if forward.dot(ray) < 1:
@@ -101,10 +253,13 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
         try:
              bb = actor.bounding_box
              verts = list(bb.get_world_vertices(actor_transform))
+             # Get bounding box dimensions
+             extent = bb.extent
+             # Convert to NuScenes format: [width, length, height]
+             size = [extent.y * 2, extent.x * 2, extent.z * 2]  # CARLA x,y,z -> NuScenes width,length,height
         except AttributeError:
              print(f"Warning: Actor ID {actor.id} of type {actor.type_id} lacks 'bounding_box'. Skipping.")
              continue
-
 
         # --- Project Vertices ---
         projected_vertices = [get_image_point(v, K, w2c) for v in verts]
@@ -139,15 +294,45 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
             w = max(0.0, x_max - x_min)
             h = max(0.0, y_max - y_min)
             bbox_from_clipped = [x_min, y_min, w, h]
-            if w < 3 or h < 3: # Tiny box filter
+            if w < MIN_BOX_PX or h < MIN_BOX_PX: # Tiny box filter
                  continue
+
+        # --- Get Velocity ---
+        velocity = actor.get_velocity()
+        velocity_magnitude = (velocity.x**2 + velocity.y**2 + velocity.z**2)**0.5
+
+        # --- Save Actor Pose ---
+        actor_pose = {
+            "actor_id": actor.id,
+            "timestamp": timestamp,
+            "translation": {
+                "x": actor_transform.location.x,
+                "y": actor_transform.location.y,
+                "z": actor_transform.location.z
+            },
+            "rotation": {
+                "pitch": actor_transform.rotation.pitch,
+                "yaw": actor_transform.rotation.yaw,
+                "roll": actor_transform.rotation.roll
+            }
+        }
 
         # --- Store Data ---
         output_data.append({
             "actor_id": actor.id,
-            "type": "vehicle", 
+            "type": "vehicle" if category.startswith('vehicle.') else "pedestrian", 
+            "category": category,
             "clipped_segments": clipped_segments_for_actor,
-            "bbox_from_clipped": bbox_from_clipped
+            "bbox_from_clipped": bbox_from_clipped,
+            "velocity": {
+                "x": velocity.x,
+                "y": velocity.y,
+                "z": velocity.z,
+                "magnitude": velocity_magnitude
+            },
+            "pose": actor_pose,
+            "size": size,  # Add bounding box dimensions
+            "visibility": compute_visibility(clipped_segments_for_actor, bbox_from_clipped, image_w, image_h)
         })
 
     # --- Save to JSON ---

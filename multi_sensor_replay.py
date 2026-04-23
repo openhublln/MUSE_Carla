@@ -20,9 +20,10 @@ from replay_processing import (
 
 class FlexibleDataPlayer:
     """ Flexible player to support various sensors (camera, radar, lidar) """
-    def __init__(self, data_dir, annotation_type="2d"):
+    def __init__(self, data_dir, annotation_type="2d", show_visibility=False):
         self.data_dir = Path(data_dir)
         self.annotation_type = annotation_type  # new parameter for annotation type ("2d" or "3d")
+        self.show_visibility = show_visibility
         if not self.data_dir.exists():
             raise RuntimeError(f"Data directory does not exist: {self.data_dir}")
         print(f"Initializing player with data directory: {self.data_dir}")
@@ -171,7 +172,7 @@ class FlexibleDataPlayer:
                 elif sensor_type == "gnss":
                     return process_gnss(file, self.cell_size)
                 elif sensor_type == "camera":
-                    return process_camera(file, sensor["name"], self.annotation_type, self.cell_size)
+                    return process_camera(file, sensor["name"], self.annotation_type, self.cell_size, self.show_visibility)
                 elif sensor_type == "semantic_camera":
                     return pygame.image.load(str(file))  # Load semantic segmentation directly
                 elif sensor_type == "instance_camera":
@@ -282,21 +283,24 @@ if __name__ == "__main__":
             config = yaml.safe_load(f)
         base_save_path = config["simulation"]["base_save_path"]
         
-        # Choisir manuellement la scène à visualiser
+        # Parse command line arguments
+        scene_name = "scene_1"  # Default value
+        annotation_type = "2d"  # Default value
+        show_visibility = False  # Default value
+        
         if len(sys.argv) > 1:
             scene_name = sys.argv[1]
-        else:
-            scene_name = "scene_1"  # Valeur par défaut
-        
-        # New: Read annotation type ("2d" or "3d") if provided (default "2d")
         if len(sys.argv) > 2:
             annotation_type = sys.argv[2]
-        else:
-            annotation_type = "2d"
+        if len(sys.argv) > 3:
+            show_visibility = sys.argv[3].lower() == "true"
             
         data_dir = os.path.join(base_save_path, scene_name)
-        print(f"Starting flexible replay from: {data_dir} with '{annotation_type}' annotations")
-        player = FlexibleDataPlayer(data_dir, annotation_type)
+        print(f"Starting flexible replay from: {data_dir}")
+        print(f"Annotation type: {annotation_type}")
+        print(f"Show visibility: {show_visibility}")
+        
+        player = FlexibleDataPlayer(data_dir, annotation_type, show_visibility)
         player.run()
     except Exception as e:
         print(f"Error: {e}")

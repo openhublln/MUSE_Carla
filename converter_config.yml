@@ -1,0 +1,96 @@
+# NuScenes Converter Configuration
+
+# Target NuScenes version
+version: 'v1.0'
+
+# Input/Output paths
+input:
+  base_dir: '_out'  # Base directory containing scene folders
+
+output:
+  base_dir: 'nuscenes_format'  # Output directory for NuScenes format data
+  maintain_folder_structure: true  # Keep original scene folder structure
+  keyframe_rate: 2.0  
+
+# Keyframe settings
+keyframe:
+  rate: 2  # Hz (NuScenes standard is 2Hz); collection runs at 10Hz so 1-in-5 frames are keyframes
+  min_points_per_object: 1  # Minimum number of lidar points for valid annotation
+
+# Coordinate system
+coordinate_system:
+  up_axis: 'z'  # CARLA uses Z-up coordinate system
+  forward_axis: 'x'  # CARLA uses X-forward coordinate system
+  use_ego_vehicle_frame: false  # Whether to use ego vehicle as origin
+
+# Sensor mappings (CARLA sensor -> NuScenes channel)
+sensor_mappings:
+  camera:
+    'Camera_Front': 'CAM_FRONT'
+    'Camera_Back': 'CAM_BACK'
+    'Camera_FrontRight': 'CAM_FRONT_RIGHT'
+    'Camera_FrontLeft': 'CAM_FRONT_LEFT' 
+    'Camera_BackRight': 'CAM_BACK_RIGHT'
+    'Camera_BackLeft': 'CAM_BACK_LEFT'
+  radar:
+    'Radar_Front': 'RADAR_FRONT'
+    'Radar_FrontRight': 'RADAR_FRONT_RIGHT'
+    'Radar_FrontLeft': 'RADAR_FRONT_LEFT'
+    'Radar_BackRight': 'RADAR_BACK_RIGHT'
+    'Radar_BackLeft': 'RADAR_BACK_LEFT'
+  lidar:
+    'Lidar': 'LIDAR_TOP'
+ # semantic_lidar:
+ #   'Semantic_Lidar': 'SEMANTIC_LIDAR'
+  gnss:
+    'GNSS': 'GNSS'
+  imu:
+    'IMU': 'IMU'
+
+# Category mappings (CARLA type -> NuScenes category)
+category_mappings:
+  'vehicle.car': 'vehicle.car'
+  'vehicle.truck': 'vehicle.truck'
+  'vehicle.bus': 'vehicle.bus.rigid'
+  'vehicle.motorcycle': 'vehicle.motorcycle'
+  'vehicle.bicycle': 'vehicle.bicycle'
+  'human.pedestrian': 'human.pedestrian.adult'
+  # Add more mappings or overrides below if needed. NuScenes categories : 
+  # animal	
+  # human.pedestrian.adult	
+  # human.pedestrian.child	
+  # human.pedestrian.construction_worker	
+  # human.pedestrian.personal_mobility	
+  # human.pedestrian.police_officer	
+  # human.pedestrian.stroller	
+  # human.pedestrian.wheelchair	
+  # movable_object.barrier	
+  # movable_object.debris	
+  # movable_object.pushable_pullable	
+  # movable_object.trafficcone	
+  # static_object.bicycle_rack	
+  # vehicle.bicycle	
+  # vehicle.bus.bendy	
+  # vehicle.bus.rigid	
+  # vehicle.car	
+  # vehicle.construction	
+  # vehicle.emergency.ambulance	
+  # vehicle.emergency.police	
+  # vehicle.motorcycle	
+  # vehicle.trailer	
+  # vehicle.truck
+  
+
+# Attribute definitions
+attributes:
+  vehicle:
+    - name: 'vehicle.moving'
+    - name: 'vehicle.parked'
+    - name: 'vehicle.stopped'
+  human:
+    - name: 'pedestrian.moving'
+    - name: 'pedestrian.standing'
+
+performance:
+  max_workers: 5
+  verbose: false
