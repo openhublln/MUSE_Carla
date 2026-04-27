@@ -34,8 +34,7 @@ replay/multi_sensor_replay.py              ← frame-by-frame visualisation with
 - All sensors tick together in synchronous CARLA mode at `simulation.frequency_hz` (default **2 Hz**).
 - 3D bounding boxes are generated automatically for every RGB camera on every tick.
 - 2D bounding boxes are **opt-in**: set `collect_bbox: true` on a camera in `config.yml`. This auto-spawns a paired instance segmentation camera and runs `generate_bbox_annotations.py` after collection.
-- The committed `config.yml` has no GNSS or IMU sensors — add them manually if needed.
-- `semantic_lidar` is silently skipped during NuScenes conversion (commented out in `converter_config.yml`).
+- `semantic_lidar` is currently not supported during NuScenes conversion (commented out in `converter_config.yml`).
 
 ---
 
@@ -63,7 +62,7 @@ python -m venv carlavenv
 source carlavenv/bin/activate          # Windows: carlavenv\Scripts\activate
 
 # Install the CARLA Python client (not on PyPI)
-pip install ../../dist/carla-*-cp3*-linux_x86_64.whl   # adjust filename for your Python/OS
+pip install ../../carla/dist/carla-*-cp3*-linux_x86_64.whl   # adjust filename for your Python/OS
 
 # Install project dependencies
 pip install -r requirements.txt
