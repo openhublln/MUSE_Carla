@@ -2,39 +2,48 @@
 
 End-to-end pipeline for collecting multi-modal sensor data in [CARLA 0.10.0](https://github.com/carla-simulator/carla/releases/tag/0.10.0) and converting it to NuScenes format. Supports RGB cameras, LiDAR, semantic LiDAR, radar, GNSS, and IMU — all output is structured to align with the NuScenes schema.
 
-## Overview & Architecture
+## Architecture
 
-The pipeline is driven by a single `config.yml` (simulation parameters, sensor layout, traffic) and a `converter_config.yml` (NuScenes conversion settings). Everything is Python, no build step.
+The pipeline has three independent stages: **collection**, **replay**, and **conversion**. Two config files drive the whole pipeline — `config.yml` for collection and `converter_config.yml` for NuScenes conversion.
 
-```
-config.yml / muse.py (PyQt6 GUI)
-        │
-        ▼
-collection/multi_sensor_collection.py          ← main entry point for data collection
-    ├── collection/sensor_processing.py        ← sensor attachment, callbacks, instance camera injection
-    ├── collection/traffic_setup.py            ← ego vehicle + NPC spawning
-    ├── collection/bounding_box_export.py      ← 3D bbox projection + visibility (runs every tick, per camera)
-    ├── collection/simulation_logic.py         ← scene folder creation (tick loop is inline in collection)
-    └── collection/generate_bbox_annotations.py← 2D bbox from instance segmentation (opt-in, post-collection)
+### Stage 1 — Data Collection
 
-conversion/carla_to_nuscene_converter.py       ← NuScenes conversion entry point
-    ├── conversion/sensor_calibrated_generators.py
-    ├── conversion/log_generator.py
-    ├── conversion/metadata_generators.py
-    ├── conversion/instance_generator.py
-    ├── conversion/sample_generator.py
-    ├── conversion/sample_data_generator.py
-    ├── conversion/annotation_generator.py
-    └── conversion/nuscenes_fixes.py
+`muse.py` (GUI) or `collection/multi_sensor_collection.py` (headless) is the entry point.
 
-replay/multi_sensor_replay.py              ← frame-by-frame visualisation with 2D/3D bbox overlay
-```
+| File | Role |
+|---|---|
+| `collection/multi_sensor_collection.py` | Main loop: connects to CARLA, ticks all sensors in sync, writes raw data to `_out/` |
+| `collection/traffic_setup.py` | Spawns the ego vehicle and NPC traffic (vehicles + pedestrians) |
+| `collection/sensor_processing.py` | Attaches sensors to the ego vehicle; auto-injects a paired instance camera for each RGB camera that has `collect_bbox: true` |
+| `collection/bounding_box_export.py` | Runs every tick: projects 3D bounding boxes of nearby actors onto each camera image and writes `*_3dbbox.json` |
+| `collection/generate_bbox_annotations.py` | Runs once after all scenes: generates 2D bounding boxes from instance segmentation images and writes `*_bbox.json`. **Opt-in** — only active for cameras with `collect_bbox: true` |
+| `collection/simulation_logic.py` | Creates the output folder structure (`scene_N/`) before collection starts |
 
-**Key design points:**
-- All sensors tick together in synchronous CARLA mode at `simulation.frequency_hz` (default **2 Hz**).
-- 3D bounding boxes are generated automatically for every RGB camera on every tick.
-- 2D bounding boxes are **opt-in**: set `collect_bbox: true` on a camera in `config.yml`. This auto-spawns a paired instance segmentation camera and runs `generate_bbox_annotations.py` after collection.
-- `semantic_lidar` is currently not supported during NuScenes conversion (commented out in `converter_config.yml`).
+### Stage 2 — Replay
+
+`replay/multi_sensor_replay.py` loads a collected scene and plays it back frame by frame in a pygame window, with optional 2D or 3D bounding box overlay.
+
+### Stage 3 — NuScenes Conversion
+
+`conversion/carla_to_nuscene_converter.py` reads `_out/` and writes a NuScenes-compatible dataset to `nuscenes_format/`.
+
+| File | Role |
+|---|---|
+| `sensor_calibrated_generators.py` | Writes `sensor.json` and `calibrated_sensor.json` |
+| `log_generator.py` | Writes `log.json` from `_out/log_info.json` |
+| `metadata_generators.py` | Writes `category.json`, `attribute.json`, `visibility.json` |
+| `instance_generator.py` | Writes `instance.json` — one entry per unique actor across all scenes |
+| `sample_generator.py` | Selects keyframes at the configured rate and writes `sample.json` |
+| `sample_data_generator.py` | Converts raw files (PNG→JPEG, NPY→BIN/PCD) and writes `sample_data.json` |
+| `annotation_generator.py` | Reads `*_3dbbox.json`, counts LiDAR/radar points per box, writes `sample_annotation.json` |
+| `nuscenes_fixes.py` | Post-processing pass: fixes camera intrinsics, LiDAR quality flags, map paths |
+
+### Key behaviours
+
+- All sensors tick together in **synchronous CARLA mode** at `simulation.frequency_hz` (default **2 Hz**).
+- **3D bounding boxes** are written automatically on every tick for every RGB camera — no configuration needed.
+- **2D bounding boxes** are opt-in: set `collect_bbox: true` on an RGB camera in `config.yml`. This auto-spawns a paired instance segmentation camera and runs 2D bbox extraction after collection.
+- `semantic_lidar` is collected but skipped during NuScenes conversion (commented out in `converter_config.yml`).
 
 ---
 
