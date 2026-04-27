@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
 
-from bounding_box_export import export_3d_bboxes
+from bounding_box_export import export_3d_bboxes, get_static_vehicle_env_objects
 
 def calculate_radar_intensity(depth):
     """Calcule l'intensité du signal radar."""
@@ -42,7 +42,7 @@ def process_sensor_config(sensors_config):
     
     return processed_config
 
-def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=None, ego_vehicle=None, sensor_actor=None):
+def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=None, ego_vehicle=None, sensor_actor=None, static_vehicles=None):
     """ Callback pour traiter et enregistrer les données des capteurs """
     try:
         # Check if any required actors are destroyed
@@ -121,7 +121,8 @@ def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=Non
             if sensor_actor is not None:
                 try:
                     sensor_actor.get_transform()  # Check if sensor is still alive
-                    export_3d_bboxes(sensor_data, sensor_folder, world, ego_vehicle, sensor_actor)
+                    export_3d_bboxes(sensor_data, sensor_folder, world, ego_vehicle, sensor_actor,
+                                     static_vehicles=static_vehicles)
                 except Exception as e:
                     print(f"Warning: Error exporting 3D bboxes for {sensor_name}: {e}")
 

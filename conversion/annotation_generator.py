@@ -13,7 +13,15 @@ class AnnotationGenerator:
         # This is an alternative fix if the primary fix in sensor_calibrated_generators.py doesn't work
         self.use_camera_specific_coordinates = False  # BACK TO BASICS: Use general coordinates
 
-    def _infer_vehicle_state(self, velocity_magnitude: float) -> str:
+    def _infer_vehicle_state(self, velocity_magnitude: float, is_static: bool = False) -> str:
+        """Return a NuScenes vehicle attribute name.
+
+        Static world vehicles (pre-placed map props with is_static=True) are always
+        'vehicle.parked' regardless of velocity (which is always 0 for them anyway).
+        Dynamic vehicles use a simple velocity threshold.
+        """
+        if is_static:
+            return "vehicle.parked"
         MOVING_THRESHOLD = 0.5
         if velocity_magnitude > MOVING_THRESHOLD:
             return "vehicle.moving"
@@ -163,13 +171,14 @@ class AnnotationGenerator:
                         velocity = annotation_data.get("velocity", {})
                         velocity_magnitude = velocity.get("magnitude", 0.0)
                         ann_category = annotation_data.get("category", "")
+                        is_static = annotation_data.get("is_static", False)
                         if ann_category.startswith("human.pedestrian"):
                             # Pedestrian attribute: moving vs standing
                             ped_state = "pedestrian.moving" if velocity_magnitude > 0.5 else "pedestrian.standing"
                             attribute_token = self.converter.attribute_name_to_token.get(ped_state, "")
                         else:
-                            # Vehicle attribute: moving vs stopped
-                            vehicle_state = self._infer_vehicle_state(velocity_magnitude)
+                            # Vehicle attribute: parked (static world props) / moving / stopped
+                            vehicle_state = self._infer_vehicle_state(velocity_magnitude, is_static=is_static)
                             attribute_token = self.converter.attribute_name_to_token.get(vehicle_state, "")
                         
                         # Apply CARLA to NuScenes coordinate system conversion

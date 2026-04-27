@@ -36,6 +36,10 @@ _BLUEPRINT_TO_NUSCENES = {
 MAX_DISTANCE_METERS = 50.0
 MIN_BOX_PX = 3
 
+# Offset added to carla.EnvironmentObject.id values so they never collide with
+# dynamic actor IDs (which are small integers assigned per-episode by CARLA).
+STATIC_VEHICLE_ID_OFFSET = 1_000_000
+
 # --- Actor category classification ---
 def classify_actor_category(actor: carla.Actor) -> str:
     """Classify a CARLA actor into a NuScenes leaf category string.
@@ -58,6 +62,22 @@ def classify_actor_category(actor: carla.Actor) -> str:
         return 'human.pedestrian'
 
     return None
+
+
+def classify_static_vehicle_category(name: str) -> str:
+    """Infer a NuScenes category for a static world vehicle from its UE asset name.
+
+    carla.EnvironmentObject has no blueprint type_id, only a UE asset name such as
+    'SM_Parked_TruckA_01'. We use simple substring matching as a best-effort heuristic.
+
+    Returns one of: vehicle.truck, vehicle.bus.rigid, vehicle.car (default).
+    """
+    name_lower = name.lower()
+    if 'truck' in name_lower or 'van' in name_lower:
+        return 'vehicle.truck'
+    if 'bus' in name_lower:
+        return 'vehicle.bus.rigid'
+    return 'vehicle.car'
 
 # --- Liang-Barsky Line Clipping Algorithm ---
 def liang_barsky_clip(x1, y1, x2, y2, x_min, y_min, x_max, y_max):
@@ -218,10 +238,70 @@ def compute_visibility(clipped_segments, bbox_from_clipped, image_width, image_h
         print(f"Error in visibility calculation: {e}")
         return 0.0
 
-def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
+
+_STATIC_VEHICLE_LABELS = {
+    carla.CityObjectLabel.Car,
+    carla.CityObjectLabel.Truck,
+    carla.CityObjectLabel.Bus,
+    carla.CityObjectLabel.Motorcycle,
+    carla.CityObjectLabel.Bicycle,
+}
+
+def get_static_vehicle_env_objects(world):
+    """Query and return deduplicated static world vehicles (carla.EnvironmentObject) once.
+
+    Call this once at collection startup (or once per scene reload) and cache
+    the result.  Do NOT call inside a per-frame sensor callback — the call to
+    world.get_environment_objects() is expensive and will cause timing
+    violations in synchronous mode (fixed_delta_seconds constraint).
+
+    Deduplication: CARLA exposes multiple EnvironmentObject entries for a single
+    parked vehicle (e.g. body + chassis sub-meshes) all sharing the same world
+    transform.  We group by rounded bounding-box location and keep only the entry
+    with the largest bounding box volume so each physical vehicle produces exactly
+    one annotation.
     """
-    Exports 3D bounding box edges projected and clipped onto the camera image
-    for DYNAMIC vehicles found via world.get_actors().
+    try:
+        raw = [
+            obj for obj in world.get_environment_objects(carla.CityObjectLabel.Any)
+            if obj.type in _STATIC_VEHICLE_LABELS
+        ]
+    except Exception as e:
+        print(f"Warning: Could not retrieve static vehicle environment objects: {e}")
+        return []
+
+    # Deduplicate: group by location rounded to 0.5 m, keep largest bbox volume.
+    best = {}  # key -> (volume, obj)
+    for obj in raw:
+        loc = obj.bounding_box.location
+        key = (round(loc.x * 2) / 2, round(loc.y * 2) / 2, round(loc.z * 2) / 2)
+        ext = obj.bounding_box.extent
+        vol = ext.x * ext.y * ext.z
+        if key not in best or vol > best[key][0]:
+            best[key] = (vol, obj)
+
+    deduped = [v for _, v in best.values()]
+    if len(deduped) < len(raw):
+        print(f"Static vehicles: {len(raw)} env objects → {len(deduped)} after deduplication.")
+    return deduped
+
+
+def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor,
+                     static_vehicles=None):
+    """
+    Exports 3D bounding box edges projected and clipped onto the camera image.
+
+    Covers two actor populations:
+      1. Dynamic actors  — world.get_actors().filter('vehicle.*' / 'walker.pedestrian.*')
+      2. Static parked vehicles — pre-filtered list of carla.EnvironmentObject passed in
+         via `static_vehicles`.  These are pre-placed map props, not spawned actors.
+         They have no type_id or velocity; they are always annotated with category
+         'vehicle.car' (or truck/bus via name-heuristic) and attribute 'vehicle.parked'.
+
+    `static_vehicles` should be built once at startup (or once per scene) by the caller
+    using `get_static_vehicle_env_objects(world)` and cached — NOT queried per frame,
+    as `world.get_environment_objects()` is expensive and will cause timing violations
+    in synchronous mode.
     """
     timestamp = int(sensor_data.timestamp * 1e3)
     image_w = float(sensor_data.width)
@@ -344,6 +424,125 @@ def export_3d_bboxes(sensor_data, save_path, world, ego_vehicle, sensor_actor):
             "size": size,  # Add bounding box dimensions
             "visibility": compute_visibility(clipped_segments_for_actor, bbox_from_clipped, image_w, image_h)
         })
+
+    # -----------------------------------------------------------------------
+    # Process static / parked world vehicles (carla.EnvironmentObject).
+    # These are pre-placed map props and are NOT returned by world.get_actors().
+    # They have no type_id, no velocity, and no per-object semantic tag, so:
+    #   - category  : inferred from the UE asset name via classify_static_vehicle_category()
+    #   - velocity  : always zero
+    #   - visibility: fixed at 100.0 (no per-object semantic pixel data available)
+    #   - is_static : True  → downstream converter forces attribute 'vehicle.parked'
+    # Actor IDs are env_obj.id + STATIC_VEHICLE_ID_OFFSET to avoid collisions with
+    # dynamic actor IDs.
+    # NOTE: For EnvironmentObject, bounding_box.location is already in world space,
+    # so we pass an identity carla.Transform() to get_world_vertices().
+    # -----------------------------------------------------------------------
+    # Use the pre-built static vehicle list (cached by caller at startup).
+    # Falling back to an empty list if not provided — caller should always supply this.
+    if static_vehicles is None:
+        static_vehicles = []
+
+    for env_obj in static_vehicles:
+        try:
+            obj_loc = env_obj.bounding_box.location  # world-space center
+
+            # --- Distance filter ---
+            dist = ((obj_loc.x - ego_location.x) ** 2 +
+                    (obj_loc.y - ego_location.y) ** 2 +
+                    (obj_loc.z - ego_location.z) ** 2) ** 0.5
+            if dist > MAX_DISTANCE_METERS:
+                continue
+
+            # --- Forward dot-product filter (same as dynamic actors) ---
+            ray_x = obj_loc.x - sensor_loc.x
+            ray_y = obj_loc.y - sensor_loc.y
+            ray_z = obj_loc.z - sensor_loc.z
+            dot = forward.x * ray_x + forward.y * ray_y + forward.z * ray_z
+            if dot < 1:
+                continue
+
+            # --- Bounding box vertices ---
+            # Identity transform: env_obj.bounding_box.location is already world-space.
+            bb = env_obj.bounding_box
+            verts = list(bb.get_world_vertices(carla.Transform()))
+            extent = bb.extent
+            size = [extent.y * 2, extent.x * 2, extent.z * 2]  # CARLA → NuScenes axis swap
+
+            # --- Project vertices ---
+            projected_vertices = [get_image_point(v, K, w2c) for v in verts]
+
+            # --- Clip edges ---
+            clipped_segments_for_obj = []
+            all_projected_points_for_bbox = []
+            for i, j in EDGES_INDICES:
+                p1, behind1 = projected_vertices[i]
+                p2, behind2 = projected_vertices[j]
+                if behind1 and behind2:
+                    continue
+                clip_result = liang_barsky_clip(
+                    p1[0], p1[1], p2[0], p2[1], 0.0, 0.0, image_w, image_h
+                )
+                if clip_result is not None:
+                    segment = [list(clip_result[0]), list(clip_result[1])]
+                    clipped_segments_for_obj.append(segment)
+                    all_projected_points_for_bbox.extend([segment[0], segment[1]])
+
+            if not clipped_segments_for_obj:
+                continue
+
+            # --- 2D bbox and MIN_BOX_PX filter ---
+            bbox_from_clipped = None
+            if all_projected_points_for_bbox:
+                xs = [pt[0] for pt in all_projected_points_for_bbox]
+                ys = [pt[1] for pt in all_projected_points_for_bbox]
+                x_min_b, x_max_b = min(xs), max(xs)
+                y_min_b, y_max_b = min(ys), max(ys)
+                w_b = max(0.0, x_max_b - x_min_b)
+                h_b = max(0.0, y_max_b - y_min_b)
+                bbox_from_clipped = [x_min_b, y_min_b, w_b, h_b]
+                if w_b < MIN_BOX_PX or h_b < MIN_BOX_PX:
+                    continue
+
+            category = classify_static_vehicle_category(env_obj.name)
+            static_actor_id = env_obj.id + STATIC_VEHICLE_ID_OFFSET
+
+            # Pose from the bounding box transform (world-space)
+            obj_transform = env_obj.transform
+            actor_pose = {
+                "actor_id": static_actor_id,
+                "timestamp": timestamp,
+                "translation": {
+                    "x": obj_transform.location.x,
+                    "y": obj_transform.location.y,
+                    "z": obj_transform.location.z,
+                },
+                "rotation": {
+                    "pitch": obj_transform.rotation.pitch,
+                    "yaw":   obj_transform.rotation.yaw,
+                    "roll":  obj_transform.rotation.roll,
+                },
+            }
+
+            output_data.append({
+                "actor_id":        static_actor_id,
+                "type":            "static_vehicle",
+                "category":        category,
+                "is_static":       True,
+                "clipped_segments": clipped_segments_for_obj,
+                "bbox_from_clipped": bbox_from_clipped,
+                "velocity": {"x": 0.0, "y": 0.0, "z": 0.0, "magnitude": 0.0},
+                "pose":     actor_pose,
+                "size":     size,
+                # Visibility is hardcoded: EnvironmentObjects have no per-object
+                # semantic pixel tag, so we cannot use compute_visibility().
+                # Any object that reaches this point passed distance + projection
+                # checks, so 100.0 is a reasonable conservative assumption.
+                "visibility": 100.0,
+            })
+        except Exception as e:
+            print(f"Warning: Error processing static vehicle env_obj id={getattr(env_obj, 'id', '?')}: {e}")
+            continue
 
     # --- Save to JSON ---
     output_file = os.path.join(save_path, f"{timestamp}_3dbbox.json")

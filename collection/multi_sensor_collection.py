@@ -13,7 +13,7 @@ from queue import Queue, Empty
 ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from bounding_box_export import export_3d_bboxes
+from bounding_box_export import export_3d_bboxes, get_static_vehicle_env_objects
 from traffic_setup import setup_traffic, spawn_ego_vehicle
 from sensor_processing import process_sensor_config, sensor_callback, clean_scene_data
 from simulation_logic import run_simulation, create_scene_folders
@@ -171,6 +171,11 @@ def main():
         settings.fixed_delta_seconds = 1.0 / float(frequency_hz)  # Configurable-Hz simulation
         world.apply_settings(settings)
 
+        # Cache static world vehicles once — querying every frame in a sensor callback
+        # causes timing violations in synchronous mode.
+        static_vehicles = get_static_vehicle_env_objects(world)
+        print(f"Found {len(static_vehicles)} static world vehicles for bbox export.")
+
         # Ensure the output directory exists
         os.makedirs(base_save_path, exist_ok=True)
 
@@ -248,8 +253,8 @@ def main():
                         actor = world.spawn_actor(bp_sensor, transform, attach_to=vehicle)
                         sensor_list.append(actor)
                         actor.listen(lambda data, q=sensor_queue, name=sensor["name"], 
-                                    path=save_path, w=world, v=vehicle, s=actor:
-                                    sensor_callback(data, q, name, path, w, v, s))
+                                    path=save_path, w=world, v=vehicle, s=actor, sv=static_vehicles:
+                                    sensor_callback(data, q, name, path, w, v, s, static_vehicles=sv))
 
                     # Run simulation and collect ego pose at each tick
                     print(f"\nStarting data collection for scene {scene_id}...")
