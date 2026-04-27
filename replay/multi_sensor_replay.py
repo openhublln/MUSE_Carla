@@ -11,8 +11,9 @@ import yaml
 import json
 
 ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from .replay_processing import (
+from replay_processing import (
     process_camera,
     process_radar,
     process_lidar,

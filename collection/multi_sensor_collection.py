@@ -11,12 +11,13 @@ from pathlib import Path
 from queue import Queue, Empty
 
 ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from .bounding_box_export import export_3d_bboxes
-from .traffic_setup import setup_traffic, spawn_ego_vehicle
-from .sensor_processing import process_sensor_config, sensor_callback, clean_scene_data
-from .simulation_logic import run_simulation, create_scene_folders
-from .generate_bbox_annotations import process_scene
+from bounding_box_export import export_3d_bboxes
+from traffic_setup import setup_traffic, spawn_ego_vehicle
+from sensor_processing import process_sensor_config, sensor_callback, clean_scene_data
+from simulation_logic import run_simulation, create_scene_folders
+from generate_bbox_annotations import process_scene
 
 EGO_POSE_FOLDER = "ego_pose"
 LOG_INFO_FILENAME = "log_info.json"

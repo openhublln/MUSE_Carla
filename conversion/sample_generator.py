@@ -1,6 +1,6 @@
 from typing import List, Dict, Set
 from pathlib import Path
-from .nuscene_utils import generate_token
+from nuscene_utils import generate_token
 
 class SampleGenerator:
     def __init__(self, converter):

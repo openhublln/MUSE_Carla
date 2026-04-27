@@ -1,4 +1,4 @@
-from .nuscene_utils import generate_token
+from nuscene_utils import generate_token
 
 class MetadataGenerators:
     def __init__(self, converter):

@@ -15,9 +15,10 @@ import shutil
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # Import utilities from the new module
-from .nuscene_utils import (
+from nuscene_utils import (
     generate_token,
     generate_composite_token,
     euler_to_quaternion,
@@ -31,16 +32,16 @@ from .nuscene_utils import (
 )
 
 # Import new generator class
-from .sensor_calibrated_generators import SensorCalibratedGenerators
-from .log_generator import LogGenerator
-from .metadata_generators import MetadataGenerators
-from .instance_generator import InstanceGenerator
-from .sample_generator import SampleGenerator
-from .sample_data_generator import SampleDataGenerator
-from .annotation_generator import AnnotationGenerator
+from sensor_calibrated_generators import SensorCalibratedGenerators
+from log_generator import LogGenerator
+from metadata_generators import MetadataGenerators
+from instance_generator import InstanceGenerator
+from sample_generator import SampleGenerator
+from sample_data_generator import SampleDataGenerator
+from annotation_generator import AnnotationGenerator
 
 # Import the comprehensive fix module
-from .nuscenes_fixes import NuScenesFixes
+from nuscenes_fixes import NuScenesFixes
 
 class NuScenesConverter:
     """Converts CARLA sensor data to NuScenes format."""

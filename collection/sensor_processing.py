@@ -8,7 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
 
-from .bounding_box_export import export_3d_bboxes
+from bounding_box_export import export_3d_bboxes
 
 def calculate_radar_intensity(depth):
     """Calcule l'intensité du signal radar."""
