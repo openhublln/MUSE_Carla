@@ -7,14 +7,14 @@ import numpy as np
 import json
 
 ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
-def detect_vehicle_instance_boxes(image_path, vehicle_tags=[14, 15, 16, 18]):
+def detect_vehicle_instance_boxes(image_path, vehicle_tags=[14, 15, 16]):
     """
     Detect bounding boxes of vehicles from an instance segmentation image.
-    Vehicle tags:
-    - 14: Car
+    CARLA semantic tags used:
+    - 14: Car  (also covers Van — no distinct Van tag in CARLA semantic segmentation)
     - 15: Truck
     - 16: Bus
-    - 18: Motorcycle
+    Note: Motorcycle (18) and Bicycle (19) are excluded — no such blueprints in CARLA 0.10.0 UE5.
     """
     # Load the image
     image = cv2.imread(image_path)

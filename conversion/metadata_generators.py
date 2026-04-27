@@ -27,17 +27,20 @@ class MetadataGenerators:
         attribute_definitions = self.converter.config.get("attributes", {})
         self.converter.attributes = []
         
-        # Process vehicle attributes
-        if "vehicle" in attribute_definitions:
-            for attr in attribute_definitions["vehicle"]:
+        # Process vehicle and human (pedestrian) attributes
+        for group_key in ("vehicle", "human"):
+            if group_key not in attribute_definitions:
+                continue
+            for attr in attribute_definitions[group_key]:
                 token = generate_token()
+                group_label = "Vehicle" if group_key == "vehicle" else "Pedestrian"
                 attribute_entry = {
                     "token": token,
                     "name": attr["name"],
-                    "description": f"Vehicle state: {attr['name'].split('.')[-1]}"
+                    "description": f"{group_label} state: {attr['name'].split('.')[-1]}"
                 }
                 self.converter.attributes.append(attribute_entry)
-                # Store token for later use
+                # Store token for later use in annotation_generator
                 self.converter.attribute_name_to_token[attr["name"]] = token
         
     def generate_visibility_entries(self):

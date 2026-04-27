@@ -5,14 +5,31 @@ import carla
 from shapely.geometry import Polygon, box
 
 # --- Simple in-file selector for which categories to export ---
-# Supported categories: vehicle.car, vehicle.truck, vehicle.bus, vehicle.motorcycle, vehicle.bicycle, human.pedestrian
+# Categories align with CARLA 0.10.0 UE5 catalogue mapped to NuScenes leaf categories.
 EXPORT_BBOX3D_CATEGORIES = {
     "vehicle.car",
     "vehicle.truck",
-    "vehicle.bus",
-    "vehicle.motorcycle",
-    "vehicle.bicycle",
+    "vehicle.emergency.police",
+    "vehicle.emergency.ambulance",
+    "vehicle.bus.rigid",
     "human.pedestrian",
+}
+
+# Blueprint ID → NuScenes category (must match traffic_setup.py BLUEPRINT_TO_NUSCENES)
+_BLUEPRINT_TO_NUSCENES = {
+    'vehicle.ue4.audi.tt':        'vehicle.car',
+    'vehicle.dodge.charger':      'vehicle.car',
+    'vehicle.taxi.ford':          'vehicle.car',
+    'vehicle.lincoln.mkz':        'vehicle.car',
+    'vehicle.ue4.mercedes.ccc':   'vehicle.car',
+    'vehicle.mini.cooper':        'vehicle.car',
+    'vehicle.nissan.patrol':      'vehicle.car',
+    'vehicle.sprinter.mercedes':  'vehicle.car',
+    'vehicle.carlacola.actors':   'vehicle.truck',
+    'vehicle.firetruck.actors':   'vehicle.truck',
+    'vehicle.dodgecop.charger':   'vehicle.emergency.police',
+    'vehicle.ambulance.ford':     'vehicle.emergency.ambulance',
+    'vehicle.fuso.mitsubishi':    'vehicle.bus.rigid',
 }
 
 # Distance and size thresholds
@@ -21,10 +38,12 @@ MIN_BOX_PX = 3
 
 # --- Actor category classification ---
 def classify_actor_category(actor: carla.Actor) -> str:
-    """Classify a CARLA actor into a simple category string compatible with NuScenes-style labels.
+    """Classify a CARLA actor into a NuScenes leaf category string.
 
-    Returns one of: vehicle.car, vehicle.truck, vehicle.bus, vehicle.motorcycle, vehicle.bicycle, human.pedestrian
-    Returns None if category cannot be determined.
+    Uses exact blueprint ID matching against the CARLA 0.10.0 UE5 catalogue.
+    Returns one of: vehicle.car, vehicle.truck, vehicle.emergency.police,
+                    vehicle.emergency.ambulance, vehicle.bus.rigid, human.pedestrian
+    Returns None if the actor type is not in the supported set.
     """
     try:
         type_id = getattr(actor, 'type_id', '') or ''
@@ -32,17 +51,8 @@ def classify_actor_category(actor: carla.Actor) -> str:
         type_id = ''
 
     if type_id.startswith('vehicle.'):
-        lower_id = type_id.lower()
-        if 'truck' in lower_id:
-            return 'vehicle.truck'
-        if 'bus' in lower_id:
-            return 'vehicle.bus'
-        if 'motorcycle' in lower_id or 'harley' in lower_id or 'yamaha' in lower_id:
-            return 'vehicle.motorcycle'
-        if 'bicycle' in lower_id or '.bike' in lower_id or 'crossbike' in lower_id:
-            return 'vehicle.bicycle'
-        # Default vehicle type
-        return 'vehicle.car'
+        # Exact match first; fall back to vehicle.car for any unknown blueprint
+        return _BLUEPRINT_TO_NUSCENES.get(type_id.lower(), 'vehicle.car')
 
     if type_id.startswith('walker.pedestrian'):
         return 'human.pedestrian'

@@ -14,7 +14,7 @@ output:
 
 # Keyframe settings
 keyframe:
-  rate: 2  # Hz (NuScenes standard is 2Hz); collection runs at 10Hz so 1-in-5 frames are keyframes
+  rate: 2  # Hz — matches collection frequency_hz in config.yml
   min_points_per_object: 1  # Minimum number of lidar points for valid annotation
 
 # Coordinate system
@@ -47,38 +47,25 @@ sensor_mappings:
   imu:
     'IMU': 'IMU'
 
-# Category mappings (CARLA type -> NuScenes category)
+# Category mappings (category from _3dbbox.json -> NuScenes category leaf name)
+# Categories are already resolved to NuScenes leaf names at collection time
+# (see bounding_box_export.py _BLUEPRINT_TO_NUSCENES). These are 1-to-1 passthroughs.
 category_mappings:
-  'vehicle.car': 'vehicle.car'
-  'vehicle.truck': 'vehicle.truck'
-  'vehicle.bus': 'vehicle.bus.rigid'
-  'vehicle.motorcycle': 'vehicle.motorcycle'
-  'vehicle.bicycle': 'vehicle.bicycle'
-  'human.pedestrian': 'human.pedestrian.adult'
-  # Add more mappings or overrides below if needed. NuScenes categories : 
-  # animal	
-  # human.pedestrian.adult	
-  # human.pedestrian.child	
-  # human.pedestrian.construction_worker	
-  # human.pedestrian.personal_mobility	
-  # human.pedestrian.police_officer	
-  # human.pedestrian.stroller	
-  # human.pedestrian.wheelchair	
-  # movable_object.barrier	
-  # movable_object.debris	
-  # movable_object.pushable_pullable	
-  # movable_object.trafficcone	
-  # static_object.bicycle_rack	
-  # vehicle.bicycle	
-  # vehicle.bus.bendy	
-  # vehicle.bus.rigid	
-  # vehicle.car	
-  # vehicle.construction	
-  # vehicle.emergency.ambulance	
-  # vehicle.emergency.police	
-  # vehicle.motorcycle	
-  # vehicle.trailer	
-  # vehicle.truck
+  'vehicle.car':                  'vehicle.car'
+  'vehicle.truck':                'vehicle.truck'
+  'vehicle.emergency.police':     'vehicle.emergency.police'
+  'vehicle.emergency.ambulance':  'vehicle.emergency.ambulance'
+  'vehicle.bus.rigid':            'vehicle.bus.rigid'
+  'human.pedestrian':             'human.pedestrian.adult'
+  # Available NuScenes categories (for reference):
+  # vehicle.car | vehicle.truck | vehicle.bus.bendy | vehicle.bus.rigid
+  # vehicle.construction | vehicle.emergency.ambulance | vehicle.emergency.police
+  # vehicle.trailer | vehicle.motorcycle | vehicle.bicycle
+  # human.pedestrian.adult | human.pedestrian.child | human.pedestrian.construction_worker
+  # human.pedestrian.personal_mobility | human.pedestrian.police_officer
+  # human.pedestrian.stroller | human.pedestrian.wheelchair
+  # movable_object.barrier | movable_object.debris | movable_object.pushable_pullable
+  # movable_object.trafficcone | static_object.bicycle_rack | animal
   
 
 # Attribute definitions

@@ -8,67 +8,68 @@ def setup_traffic(client, world, traffic_config):
         # Get blueprints for vehicles and pedestrians
         blueprints = world.get_blueprint_library().filter('vehicle.*')
 
-        # --- Build category-specific blueprint pools with robust base_type detection ---
-        def get_base_type(bp):
-            # Prefer explicit attribute when available (non-empty string only)
-            try:
-                if bp.has_attribute('base_type'):
-                    attr = bp.get_attribute('base_type')
-                    val = attr.as_string() if hasattr(attr, 'as_string') else str(attr)
-                    if val.strip():
-                        return val.strip()
-            except Exception:
-                pass
-            # Fallback: infer from blueprint id
-            # Note: CARLA 0.10.0 has no motorcycle/bicycle blueprints — pools will be empty.
-            bp_id = getattr(bp, 'id', '').lower()
-            if '.truck' in bp_id: return 'truck'
-            if '.bus' in bp_id: return 'bus'
-            if 'sprinter' in bp_id or 'ambulance' in bp_id or 'firetruck' in bp_id: return 'truck'
-            if '.motorcycle' in bp_id or '.bike' in bp_id: return 'motorcycle' if '.motorcycle' in bp_id else 'bicycle'
-            if '.bicycle' in bp_id: return 'bicycle'
-            if bp_id.startswith('vehicle.'): return 'car'  # catch-all
-            return None
+        # --- Build per-NuScenes-category blueprint pools ---
+        # Blueprint → NuScenes category mapping for CARLA 0.10.0 UE5 catalogue:
+        #   vehicle.car          : regular cars + Mercedes Sprinter (van treated as car in NuScenes)
+        #   vehicle.truck        : CarlaCola, Firetruck
+        #   vehicle.emergency.police    : Dodge Police Charger
+        #   vehicle.emergency.ambulance : Ford Ambulance
+        #   vehicle.bus.rigid    : Mitsubishi Fusorosa
+        BLUEPRINT_TO_NUSCENES = {
+            # Cars
+            'vehicle.ue4.audi.tt':        'vehicle.car',
+            'vehicle.dodge.charger':      'vehicle.car',
+            'vehicle.taxi.ford':          'vehicle.car',
+            'vehicle.lincoln.mkz':        'vehicle.car',
+            'vehicle.ue4.mercedes.ccc':   'vehicle.car',
+            'vehicle.mini.cooper':        'vehicle.car',
+            'vehicle.nissan.patrol':      'vehicle.car',
+            # Van → NuScenes vehicle.car (Sprinter is a passenger/cargo van, not a truck)
+            'vehicle.sprinter.mercedes':  'vehicle.car',
+            # Trucks
+            'vehicle.carlacola.actors':   'vehicle.truck',
+            'vehicle.firetruck.actors':   'vehicle.truck',
+            # Emergency
+            'vehicle.dodgecop.charger':   'vehicle.emergency.police',
+            'vehicle.ambulance.ford':     'vehicle.emergency.ambulance',
+            # Bus
+            'vehicle.fuso.mitsubishi':    'vehicle.bus.rigid',
+        }
 
-        cars, trucks, buses, motos, bicycles = [], [], [], [], []
+        category_pools = {cat: [] for cat in [
+            'vehicle.car', 'vehicle.truck',
+            'vehicle.emergency.police', 'vehicle.emergency.ambulance',
+            'vehicle.bus.rigid',
+        ]}
+
         print("\n--- Blueprint classification debug ---")
         for bp in blueprints:
-            bt = get_base_type(bp)
-            print(f"  {bp.id:55s} -> {bt}")
-            if bt == 'car':
-                cars.append(bp)
-            elif bt == 'truck':
-                trucks.append(bp)
-            elif bt == 'bus':
-                buses.append(bp)
-            elif bt == 'motorcycle':
-                motos.append(bp)
-            elif bt == 'bicycle':
-                bicycles.append(bp)
-        print(f"  TOTALS: cars={len(cars)} trucks={len(trucks)} buses={len(buses)} motorcycles={len(motos)} bicycles={len(bicycles)}")
+            bp_id = bp.id.lower()
+            # Match against known blueprint IDs; fall back to car for any unknown vehicle
+            nuscenes_cat = next(
+                (cat for known_id, cat in BLUEPRINT_TO_NUSCENES.items() if bp_id == known_id),
+                'vehicle.car'
+            )
+            print(f"  {bp.id:55s} -> {nuscenes_cat}")
+            if nuscenes_cat in category_pools:
+                category_pools[nuscenes_cat].append(bp)
+        print("  TOTALS: " + " ".join(f"{k}={len(v)}" for k, v in category_pools.items()))
         print("--- End blueprint debug ---\n")
 
-        # Weighted category selection favoring cars
-        category_pools = {
-            'car': cars,
-            'truck': trucks,
-            'bus': buses,
-            'motorcycle': motos,
-            'bicycle': bicycles,
-        }
-        # CARLA 0.10.0 has no motorcycle or bicycle blueprints — only car, truck, bus exist.
+        # Spawn weights — realistic urban distribution
+        # Regular cars dominate; small fractions for trucks, emergency, bus
         category_weights = {
-            'car': 0.7,
-            'truck': 0.2,
-            'bus': 0.1,
-            'motorcycle': 0.0,
-            'bicycle': 0.0,
+            'vehicle.car':                  0.65,
+            'vehicle.truck':                0.15,
+            'vehicle.emergency.police':     0.05,
+            'vehicle.emergency.ambulance':  0.05,
+            'vehicle.bus.rigid':            0.10,
         }
         available_categories = [c for c, pool in category_pools.items() if len(pool) > 0]
         if not available_categories:
-            available_categories = ['car']
-            category_pools['car'] = list(blueprints)
-            category_weights['car'] = 1.0
+            available_categories = ['vehicle.car']
+            category_pools['vehicle.car'] = list(blueprints)
+            category_weights['vehicle.car'] = 1.0
 
         # If safe_spawn requested, still keep to known types but already enforced by pools
         blueprintsWalkers = world.get_blueprint_library().filter('walker.pedestrian.*')
@@ -93,8 +94,11 @@ def setup_traffic(client, world, traffic_config):
         vehicle_list = []
         random.shuffle(spawn_points)
 
-        # Ensure at least one of each available category (car/truck/bus/motorcycle/bicycle), if possible
-        required_order = [c for c in ['car', 'truck', 'bus', 'motorcycle', 'bicycle'] if c in available_categories]
+        # Ensure at least one of each available category, if possible
+        required_order = [c for c in [
+            'vehicle.car', 'vehicle.truck', 'vehicle.bus.rigid',
+            'vehicle.emergency.police', 'vehicle.emergency.ambulance',
+        ] if c in available_categories]
         idx_sp = 0
         for cat in required_order:
             if idx_sp >= num_vehicles:
@@ -124,7 +128,7 @@ def setup_traffic(client, world, traffic_config):
                 chosen_category = random.choices(available_categories, weights=weights, k=1)[0]
                 pool = category_pools.get(chosen_category, [])
                 if not pool:
-                    pool = category_pools.get('car', []) or list(blueprints)
+                    pool = category_pools.get('vehicle.car', []) or list(blueprints)
                 blueprint = random.choice(pool)
                 if blueprint.has_attribute('color'):
                     color = random.choice(blueprint.get_attribute('color').recommended_values)

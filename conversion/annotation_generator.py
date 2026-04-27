@@ -162,8 +162,15 @@ class AnnotationGenerator:
                         
                         velocity = annotation_data.get("velocity", {})
                         velocity_magnitude = velocity.get("magnitude", 0.0)
-                        vehicle_state = self._infer_vehicle_state(velocity_magnitude)
-                        attribute_token = self.converter.attribute_name_to_token.get(vehicle_state, "")
+                        ann_category = annotation_data.get("category", "")
+                        if ann_category.startswith("human.pedestrian"):
+                            # Pedestrian attribute: moving vs standing
+                            ped_state = "pedestrian.moving" if velocity_magnitude > 0.5 else "pedestrian.standing"
+                            attribute_token = self.converter.attribute_name_to_token.get(ped_state, "")
+                        else:
+                            # Vehicle attribute: moving vs stopped
+                            vehicle_state = self._infer_vehicle_state(velocity_magnitude)
+                            attribute_token = self.converter.attribute_name_to_token.get(vehicle_state, "")
                         
                         # Apply CARLA to NuScenes coordinate system conversion
                         # CARLA: X-forward, Y-right, Z-up
