@@ -5,21 +5,10 @@ v1.0-mini/
 
 # Virtual environments
 carlavenv/
-venv/
-env/
-.venv*/
 
 # Python cache
 __pycache__/
 *.py[cod]
 
-# IDE
-.vscode/
-.idea/
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Agent instruction file (local only)
+# Agent instruction file
 AGENTS.md
