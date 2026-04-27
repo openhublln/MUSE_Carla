@@ -3,7 +3,7 @@ import numpy as np
 from typing import List, Dict
 from scipy.spatial import cKDTree
 # Assuming nuscene_utils and carla types are available or passed through self.converter
-from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, carla_camera_rotation_to_nuscenes_quaternion, count_points_in_box, transform_points_to_global, transform_radar_points_to_global, transform_box_to_ego_frame
+from .nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, carla_camera_rotation_to_nuscenes_quaternion, count_points_in_box, transform_points_to_global, transform_radar_points_to_global, transform_box_to_ego_frame
 import carla # For carla.Transform type hint if needed directly
 
 class AnnotationGenerator:

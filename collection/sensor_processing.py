@@ -4,7 +4,11 @@ import math
 import yaml
 import numpy as np
 import carla
-from bounding_box_export import export_3d_bboxes
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
+
+from .bounding_box_export import export_3d_bboxes
 
 def calculate_radar_intensity(depth):
     """Calcule l'intensité du signal radar."""
@@ -98,7 +102,7 @@ def sensor_callback(sensor_data, sensor_queue, sensor_name, save_path, world=Non
             
             # Get the sensor's blueprint ID from the config
             blueprint_id = None
-            with open('config.yml', 'r') as f:
+            with open(ROOT / 'config.yml', 'r') as f:
                 config = yaml.safe_load(f)
                 for sensor in config["sensors"]:
                     if sensor["name"] == sensor_name:

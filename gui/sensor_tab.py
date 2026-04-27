@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                             QComboBox, QPushButton, QScrollArea)
 from PyQt6.QtCore import pyqtSignal
-from sensor_widgets import SensorWidget
+from .sensor_widgets import SensorWidget
 
 class SensorTab(QWidget):
     """Tab for sensor configuration"""

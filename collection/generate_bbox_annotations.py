@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import json
 
+ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
 def detect_vehicle_instance_boxes(image_path, vehicle_tags=[14, 15, 16, 18]):
     """
     Detect bounding boxes of vehicles from an instance segmentation image.
@@ -81,7 +82,7 @@ def get_camera_config(camera_name, config):
 def process_scene(scene_path):
     """Process all RGB cameras in a scene that have instance segmentation pairs"""
     # Load config file to get camera parameters
-    with open('config.yml', 'r') as f:
+    with open(ROOT / 'config.yml', 'r') as f:
         config = yaml.safe_load(f)
     
     print(f"Processing scene: {scene_path}")
@@ -148,7 +149,7 @@ def process_scene(scene_path):
         print(f"done ({processed} frames)")
 
 def main():
-    with open('config.yml', 'r') as f:
+    with open(ROOT / 'config.yml', 'r') as f:
         config = yaml.safe_load(f)
     base_save_path = config["simulation"]["base_save_path"]
     

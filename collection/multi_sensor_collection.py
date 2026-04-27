@@ -7,12 +7,16 @@ import json
 import subprocess
 import sys
 import glob
+from pathlib import Path
 from queue import Queue, Empty
-from bounding_box_export import export_3d_bboxes
-from traffic_setup import setup_traffic, spawn_ego_vehicle
-from sensor_processing import process_sensor_config, sensor_callback, clean_scene_data
-from simulation_logic import run_simulation, create_scene_folders
-from generate_bbox_annotations import process_scene
+
+ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
+
+from .bounding_box_export import export_3d_bboxes
+from .traffic_setup import setup_traffic, spawn_ego_vehicle
+from .sensor_processing import process_sensor_config, sensor_callback, clean_scene_data
+from .simulation_logic import run_simulation, create_scene_folders
+from .generate_bbox_annotations import process_scene
 
 EGO_POSE_FOLDER = "ego_pose"
 LOG_INFO_FILENAME = "log_info.json"
@@ -53,14 +57,14 @@ def generate_map_mask(base_save_path):
     
     try:
         # Check if generate_map_mask.py exists
-        if not os.path.exists('generate_map_mask.py'):
+        if not os.path.exists(str(Path(__file__).parent / 'generate_map_mask.py')):
             print("generate_map_mask.py not found in current directory")
             return False
         
         # Run the map mask generation script
         cmd = [
             sys.executable,  # Use the same Python interpreter
-            'generate_map_mask.py',
+            str(Path(__file__).parent / 'generate_map_mask.py'),
             '--output', base_save_path,
             '--resolution', 'medium',  # Use medium resolution for good quality
             '--altitude', '400.0',
@@ -131,7 +135,7 @@ def main():
     """ Initialise Carla, configure les paramètres et lance les simulations """
     try:
         # Charger la configuration depuis le fichier YAML
-        with open('config.yml', 'r') as f:
+        with open(ROOT / 'config.yml', 'r') as f:
             config = yaml.safe_load(f)
         
         # Process sensor configuration to add instance cameras

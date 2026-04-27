@@ -10,6 +10,7 @@ import struct
 import yaml
 from scipy.spatial.transform import Rotation
 
+ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
 class NuScenesFixes:
     """Comprehensive fix module for nuScenes data format issues."""
     
@@ -249,7 +250,7 @@ class NuScenesFixes:
         
         calibrated_file = self.version_dir / 'calibrated_sensor.json'
         sensor_file = self.version_dir / 'sensor.json'
-        config_file = Path('config.yml')
+        config_file = ROOT / 'config.yml'
         
         if not calibrated_file.exists() or not sensor_file.exists() or not config_file.exists():
             print("  Warning: calibrated_sensor.json, sensor.json, or config.yml not found")

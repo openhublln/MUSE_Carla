@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from bisect import bisect_left
-from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, adjust_z_for_ego_pose
+from .nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, adjust_z_for_ego_pose
 from PIL import Image
 import shutil
 import numpy as np

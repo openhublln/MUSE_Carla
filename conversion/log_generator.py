@@ -1,5 +1,5 @@
 import json
-from nuscene_utils import generate_token
+from .nuscene_utils import generate_token
 
 class LogGenerator:
     def __init__(self, converter):

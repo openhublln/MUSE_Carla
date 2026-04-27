@@ -10,24 +10,24 @@ The pipeline is driven by a single `config.yml` (simulation parameters, sensor l
 config.yml / config_editor.py (PyQt6 GUI)
         │
         ▼
-multi_sensor_collection.py          ← main entry point for data collection
-    ├── sensor_processing.py        ← sensor attachment, callbacks, instance camera injection
-    ├── traffic_setup.py            ← ego vehicle + NPC spawning
-    ├── bounding_box_export.py      ← 3D bbox projection + visibility (runs every tick, per camera)
-    ├── simulation_logic.py         ← scene folder creation (tick loop is inline in collection)
-    └── generate_bbox_annotations.py← 2D bbox from instance segmentation (opt-in, post-collection)
+collection/multi_sensor_collection.py          ← main entry point for data collection
+    ├── collection/sensor_processing.py        ← sensor attachment, callbacks, instance camera injection
+    ├── collection/traffic_setup.py            ← ego vehicle + NPC spawning
+    ├── collection/bounding_box_export.py      ← 3D bbox projection + visibility (runs every tick, per camera)
+    ├── collection/simulation_logic.py         ← scene folder creation (tick loop is inline in collection)
+    └── collection/generate_bbox_annotations.py← 2D bbox from instance segmentation (opt-in, post-collection)
 
-carla_to_nuscene_converter.py       ← NuScenes conversion entry point
-    ├── sensor_calibrated_generators.py
-    ├── log_generator.py
-    ├── metadata_generators.py
-    ├── instance_generator.py
-    ├── sample_generator.py
-    ├── sample_data_generator.py
-    ├── annotation_generator.py
-    └── nuscenes_fixes.py
+conversion/carla_to_nuscene_converter.py       ← NuScenes conversion entry point
+    ├── conversion/sensor_calibrated_generators.py
+    ├── conversion/log_generator.py
+    ├── conversion/metadata_generators.py
+    ├── conversion/instance_generator.py
+    ├── conversion/sample_generator.py
+    ├── conversion/sample_data_generator.py
+    ├── conversion/annotation_generator.py
+    └── conversion/nuscenes_fixes.py
 
-multi_sensor_replay.py              ← frame-by-frame visualisation with 2D/3D bbox overlay
+replay/multi_sensor_replay.py              ← frame-by-frame visualisation with 2D/3D bbox overlay
 ```
 
 **Key design points:**
@@ -95,20 +95,20 @@ Set simulation parameters (number of scenes, duration, frequency) and add/edit s
 **3. Run data collection**  
 Click "Run Simulation" in the GUI (blocks until complete), or run headless:
 ```bash
-python multi_sensor_collection.py
+python collection/multi_sensor_collection.py
 ```
 Output is written to `./_out/scene_N/`.
 
 **4. Replay / verify**  
 Inspect collected data frame by frame, with 2D and 3D bbox overlays:
 ```bash
-python multi_sensor_replay.py [scene_name] [2d|3d]
+python replay/multi_sensor_replay.py [scene_name] [2d|3d]
 ```
 Or use the "Visualize" button in the GUI.
 
 **5. Convert to NuScenes format**  
 ```bash
-python carla_to_nuscene_converter.py converter_config.yml
+python conversion/carla_to_nuscene_converter.py converter_config.yml
 ```
 Output is written to `./nuscenes_format/`.
 

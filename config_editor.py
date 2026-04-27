@@ -8,8 +8,8 @@ from PyQt6.QtCore import Qt
 import os
 import subprocess
 from pathlib import Path
-from simulation_tab import SimulationTab
-from sensor_tab import SensorTab
+from gui.simulation_tab import SimulationTab
+from gui.sensor_tab import SensorTab
 
 class MainWindow(QMainWindow):
     """Main window of the configuration editor"""
@@ -151,7 +151,7 @@ class MainWindow(QMainWindow):
             
             # Create process with proper working directory
             process = subprocess.Popen(
-                [python_exe, "multi_sensor_collection.py"],
+                [python_exe, "collection/multi_sensor_collection.py"],
                 cwd=current_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -255,7 +255,7 @@ class MainWindow(QMainWindow):
                 
                 # Run visualization script with scene and annotation type arguments
                 process = subprocess.Popen(
-                    [python_exe, "multi_sensor_replay.py", selected_scene, annotation_type],
+                    [python_exe, "replay/multi_sensor_replay.py", selected_scene, annotation_type],
                     cwd=current_dir
                 )
                 
@@ -380,7 +380,7 @@ class MainWindow(QMainWindow):
             )
             
             process = subprocess.Popen(
-                [python_exe, "carla_to_nuscene_converter.py", converter_config_path],
+                [python_exe, "conversion/carla_to_nuscene_converter.py", converter_config_path],
                 cwd=current_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

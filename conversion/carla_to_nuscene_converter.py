@@ -14,8 +14,10 @@ import math
 import shutil
 from PIL import Image
 
+ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
+
 # Import utilities from the new module
-from nuscene_utils import (
+from .nuscene_utils import (
     generate_token,
     generate_composite_token,
     euler_to_quaternion,
@@ -29,16 +31,16 @@ from nuscene_utils import (
 )
 
 # Import new generator class
-from sensor_calibrated_generators import SensorCalibratedGenerators
-from log_generator import LogGenerator
-from metadata_generators import MetadataGenerators
-from instance_generator import InstanceGenerator
-from sample_generator import SampleGenerator
-from sample_data_generator import SampleDataGenerator
-from annotation_generator import AnnotationGenerator
+from .sensor_calibrated_generators import SensorCalibratedGenerators
+from .log_generator import LogGenerator
+from .metadata_generators import MetadataGenerators
+from .instance_generator import InstanceGenerator
+from .sample_generator import SampleGenerator
+from .sample_data_generator import SampleDataGenerator
+from .annotation_generator import AnnotationGenerator
 
 # Import the comprehensive fix module
-from nuscenes_fixes import NuScenesFixes
+from .nuscenes_fixes import NuScenesFixes
 
 class NuScenesConverter:
     """Converts CARLA sensor data to NuScenes format."""
@@ -208,9 +210,8 @@ class NuScenesConverter:
         # Load simulation config
         sim_config_path = self.input_base / 'config.yml'
         if not sim_config_path.exists():
-            # Try to find it relative to this script's directory if not in input_base
-            script_dir = Path(__file__).parent
-            sim_config_path = script_dir / 'config.yml'
+            # Try to find it relative to MUSE_Carla root
+            sim_config_path = ROOT / 'config.yml'
             if not sim_config_path.exists():
                  # As a last resort, assume it's just 'config.yml' in the current working directory
                 sim_config_path = Path('config.yml')
@@ -327,7 +328,7 @@ class NuScenesConverter:
         Returns:
             A list representing the Quaternion [w, x, y, z].
         """
-        from nuscene_utils import carla_rotation_to_nuscenes_quaternion
+        from .nuscene_utils import carla_rotation_to_nuscenes_quaternion
         return carla_rotation_to_nuscenes_quaternion(roll, pitch, yaw)
 
     def _convert_bounding_box_size(self, extent) -> List[float]:

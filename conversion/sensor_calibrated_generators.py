@@ -1,6 +1,6 @@
 import json
 from typing import List, Dict
-from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, carla_camera_rotation_to_nuscenes_quaternion
+from .nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, carla_camera_rotation_to_nuscenes_quaternion
 
 class SensorCalibratedGenerators:
     def __init__(self, converter):

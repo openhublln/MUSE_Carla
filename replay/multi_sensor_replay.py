@@ -9,7 +9,10 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 import yaml
 import json
-from replay_processing import (
+
+ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
+
+from .replay_processing import (
     process_camera,
     process_radar,
     process_lidar,
@@ -29,7 +32,7 @@ class FlexibleDataPlayer:
         print(f"Initializing player with data directory: {self.data_dir}")
 
         # Charger la config pour récupérer la liste des capteurs
-        with open('config.yml', 'r') as f:
+        with open(ROOT / 'config.yml', 'r') as f:
             config = yaml.safe_load(f)
         sensors_config = config["sensors"]
         
@@ -279,7 +282,7 @@ class FlexibleDataPlayer:
 if __name__ == "__main__":
     try:
         # Charger la configuration pour obtenir le chemin de base des scènes
-        with open('config.yml', 'r') as f:
+        with open(ROOT / 'config.yml', 'r') as f:
             config = yaml.safe_load(f)
         base_save_path = config["simulation"]["base_save_path"]
         
