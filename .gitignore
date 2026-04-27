@@ -1,29 +1,25 @@
-# Output directory
+# Data output
 _out/
+nuscenes_format/
+v1.0-mini/
 
-# Python cache files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Virtual environment
+# Virtual environments
+carlavenv/
 venv/
 env/
-carlavenv/
-.venv_nuscenes_py311/
+.venv*/
 
-# IDE files
+# Python cache
+__pycache__/
+*.py[cod]
+
+# IDE
 .vscode/
 .idea/
 
-# System files
+# OS
 .DS_Store
 Thumbs.db
 
-# Others
-todo.md
-nuscenes_format
-
-v1.0-mini
-
-
+# Agent instruction file (local only)
+AGENTS.md

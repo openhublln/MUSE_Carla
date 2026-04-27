@@ -81,7 +81,7 @@ class SensorWidget(QGroupBox):
         self.bbox_widget = QWidget()
         bbox_layout = QHBoxLayout()
         self.collect_bbox = QCheckBox("Enable Bounding Box Collection")
-        self.collect_bbox.setChecked(True)
+        self.collect_bbox.setChecked(False)
         self.collect_bbox.stateChanged.connect(self.configChanged.emit)
         bbox_layout.addWidget(self.collect_bbox)
         self.bbox_widget.setLayout(bbox_layout)

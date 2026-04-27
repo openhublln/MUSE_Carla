@@ -28,7 +28,7 @@ class SensorTab(QWidget):
                 "location": {"x": 0, "y": 0, "z": 2.4},
                 "rotation": {"yaw": 0}
             },
-            "collect_bbox": True
+            "collect_bbox": False
         },
         "Camera_Front": {
             "type": "Camera",
@@ -41,7 +41,7 @@ class SensorTab(QWidget):
                 "location": {"x": 0.4, "y": 0, "z": 2.4},
                 "rotation": {"yaw": 0}
             },
-            "collect_bbox": True
+            "collect_bbox": False
         },
         "Camera_Back": {
             "type": "Camera",
@@ -54,7 +54,7 @@ class SensorTab(QWidget):
                 "location": {"x": -1, "y": 0, "z": 2.4},
                 "rotation": {"yaw": 180}
             },
-            "collect_bbox": True
+            "collect_bbox": False
         },
         "Camera_FrontRight": {
             "type": "Camera",
@@ -67,7 +67,7 @@ class SensorTab(QWidget):
                 "location": {"x": 0.4, "y": 0.3, "z": 2.4},
                 "rotation": {"yaw": 45}
             },
-            "collect_bbox": True
+            "collect_bbox": False
         },
         "Camera_FrontLeft": {
             "type": "Camera",
@@ -80,7 +80,7 @@ class SensorTab(QWidget):
                 "location": {"x": 0.4, "y": -0.3, "z": 2.4},
                 "rotation": {"yaw": -45}
             },
-            "collect_bbox": True
+            "collect_bbox": False
         },
         "Camera_BackRight": {
             "type": "Camera",
@@ -93,7 +93,7 @@ class SensorTab(QWidget):
                 "location": {"x": -0.3, "y": 0.5, "z": 2.4},
                 "rotation": {"yaw": -225} 
             },
-            "collect_bbox": True
+            "collect_bbox": False
         },
         "Camera_BackLeft": {
             "type": "Camera",
@@ -106,7 +106,7 @@ class SensorTab(QWidget):
                 "location": {"x": -0.3, "y": -0.5, "z": 2.4},
                 "rotation": {"yaw": 225}  
             },
-            "collect_bbox": True
+            "collect_bbox": False
         },
         "Radar_Front": {
             "type": "Radar",

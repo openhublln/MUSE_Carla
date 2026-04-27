@@ -12,7 +12,7 @@ from bounding_box_export import export_3d_bboxes
 from traffic_setup import setup_traffic, spawn_ego_vehicle
 from sensor_processing import process_sensor_config, sensor_callback, clean_scene_data
 from simulation_logic import run_simulation, create_scene_folders
-# from generate_bbox_annotations import process_scene  # 2D bbox disabled
+from generate_bbox_annotations import process_scene
 
 EGO_POSE_FOLDER = "ego_pose"
 LOG_INFO_FILENAME = "log_info.json"
@@ -332,10 +332,10 @@ def main():
             clean_scene_data(path, sensors_for_cleanup)
         print("Toutes les scènes ont été nettoyées avec succès !")
         
-        # 2D bounding box annotation generation disabled (generate_bbox_annotations.py)
-        # Bicycle (CARLA tag 19) was not included; re-enable and fix tag list if 2D bboxes are needed.
-        # for path in scene_paths:
-        #     process_scene(path)
+        # 2D bounding box annotation — runs only for cameras with collect_bbox: true in config.yml
+        # Bicycle (CARLA tag 19) is intentionally excluded from detection tags.
+        for path in scene_paths:
+            process_scene(path)
     
     except KeyboardInterrupt:
         print(" - Interrompu par l'utilisateur.")

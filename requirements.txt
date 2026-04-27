@@ -1,0 +1,10 @@
+numpy>=1.24.4,<2.0
+opencv-python
+PyYAML
+pygame
+matplotlib
+PyQt6
+Pillow
+open3d
+shapely
+scipy
