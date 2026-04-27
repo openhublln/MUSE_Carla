@@ -223,12 +223,24 @@ class MainWindow(QMainWindow):
             layout.addWidget(label)
             layout.addWidget(combo)
             
-            # Add annotation type selector
+            # Check whether any camera has collect_bbox: true in the current config
+            sensor_list = self.sensor_tab.get_config()
+            has_2d_bbox = any(
+                s.get("type") == "camera" and s.get("collect_bbox", False)
+                for s in sensor_list
+            )
+
+            # Add annotation type selector — 3D is always available and default;
+            # 2D is only enabled when collect_bbox is active on at least one camera
             ann_layout = QHBoxLayout()
             ann_label = QLabel("Select Bounding Box Type:")
             ann_combo = QComboBox()
-            ann_combo.addItem("2D", "2d")
             ann_combo.addItem("3D", "3d")
+            if has_2d_bbox:
+                ann_combo.addItem("2D", "2d")
+            else:
+                ann_combo.addItem("2D (not configured)", "2d")
+                ann_combo.model().item(1).setEnabled(False)
             ann_layout.addWidget(ann_label)
             ann_layout.addWidget(ann_combo)
             layout.addLayout(ann_layout)
