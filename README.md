@@ -7,7 +7,7 @@ End-to-end pipeline for collecting multi-modal sensor data in [CARLA 0.10.0](htt
 The pipeline is driven by a single `config.yml` (simulation parameters, sensor layout, traffic) and a `converter_config.yml` (NuScenes conversion settings). Everything is Python, no build step.
 
 ```
-config.yml / config_editor.py (PyQt6 GUI)
+config.yml / muse.py (PyQt6 GUI)
         │
         ▼
 collection/multi_sensor_collection.py          ← main entry point for data collection
@@ -71,13 +71,13 @@ pip install -r requirements.txt
 
 > **Linux only:** the GUI also requires `sudo apt-get install -y libxcb-cursor0`
 
-**4. Launch the Configuration Editor**
+**4. Launch the GUI**
 
 All scripts must be run from the `MUSE_Carla/` directory (config files are opened by relative path):
 
 ```bash
 cd MUSE_Carla
-python config_editor.py
+python muse.py
 ```
 
 ---
