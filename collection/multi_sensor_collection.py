@@ -1,5 +1,4 @@
 import os
-import random
 import time
 import yaml
 import carla
@@ -9,104 +8,146 @@ import sys
 import glob
 from pathlib import Path
 from queue import Queue, Empty
+from concurrent.futures import ThreadPoolExecutor
 
 ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from bounding_box_export import export_3d_bboxes, get_static_vehicle_env_objects
 from traffic_setup import setup_traffic, spawn_ego_vehicle
-from sensor_processing import process_sensor_config, sensor_callback, clean_scene_data
-from simulation_logic import run_simulation, create_scene_folders
+from sensor_processing import process_sensor_config, sensor_callback, write_sensor_data, clean_scene_data
+from simulation_logic import create_scene_folders
 from generate_bbox_annotations import process_scene
 
 EGO_POSE_FOLDER = "ego_pose"
 LOG_INFO_FILENAME = "log_info.json"
 
-def save_ego_pose(ego_vehicle, timestamp, ego_pose_dir):
-    """Save the ego vehicle's pose as a JSON file in the ego_pose directory."""
-    transform = ego_vehicle.get_transform()
+# Worker threads for file I/O.  All data passed to workers is plain Python /
+# NumPy — no CARLA C++ objects — so thread count can be higher.
+IO_WORKERS = 8
+
+# Maximum number of futures allowed in-flight before we block world.tick().
+# Prevents unbounded memory growth when I/O is slower than sensor tick rate.
+# At 10 Hz with ~16 sensors/tick each frame is ~2 MB; 32 pending = ~64 MB max.
+MAX_PENDING_FUTURES = 32
+
+
+def build_actor_static_cache(world, ego_id):
+    """Fetch static actor metadata once per scene (type_id + bounding_box).
+
+    These fields never change for a spawned actor, so we only need one RPC call
+    per scene instead of one per tick.  Returns a dict keyed by actor ID.
+    """
+    cache = {}
+    try:
+        all_actors = world.get_actors()
+        for actor in list(all_actors.filter('vehicle.*')) + list(all_actors.filter('walker.pedestrian.*')):
+            if actor.id == ego_id:
+                continue
+            try:
+                bb  = actor.bounding_box
+                ext = bb.extent
+                cache[actor.id] = {
+                    'type_id': actor.type_id,
+                    'bounding_box': {
+                        'loc_x': bb.location.x, 'loc_y': bb.location.y, 'loc_z': bb.location.z,
+                        'ext_x': ext.x, 'ext_y': ext.y, 'ext_z': ext.z,
+                    },
+                }
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"Warning: build_actor_static_cache failed: {e}")
+    return cache
+
+
+def build_actor_snapshot(static_cache, world_snapshot):
+    """Build per-tick actor snapshot from world_snapshot only — zero RPC calls.
+
+    Uses the static cache (type_id + bounding_box) built once at scene start,
+    combined with per-tick transform/velocity from the already-fetched snapshot.
+
+    Parameters
+    ----------
+    static_cache   : dict[int, dict] — from build_actor_static_cache()
+    world_snapshot : carla.WorldSnapshot — already fetched this tick
+
+    Returns
+    -------
+    dict[int, dict]  keyed by actor ID
+    """
+    result = {}
+    for actor_id, static in static_cache.items():
+        actor_snap = world_snapshot.find(actor_id)
+        if actor_snap is None:
+            continue
+        try:
+            t = actor_snap.get_transform()
+            v = actor_snap.get_velocity()
+            result[actor_id] = {
+                'type_id':      static['type_id'],
+                'bounding_box': static['bounding_box'],
+                'transform': {
+                    'x': t.location.x, 'y': t.location.y, 'z': t.location.z,
+                    'pitch': t.rotation.pitch, 'yaw': t.rotation.yaw, 'roll': t.rotation.roll,
+                    'matrix': [list(row) for row in t.get_matrix()],
+                },
+                'velocity': {'x': v.x, 'y': v.y, 'z': v.z},
+            }
+        except Exception:
+            pass
+    return result
+
+
+def save_ego_pose(transform, timestamp, ego_pose_dir):
+    """Save the ego vehicle's pose. transform is a plain Python dict."""
     pose = {
         "timestamp": timestamp,
         "translation": {
-            "x": transform.location.x,
-            "y": transform.location.y,
-            "z": transform.location.z
+            "x": transform['x'], "y": transform['y'], "z": transform['z']
         },
         "rotation": {
-            "pitch": transform.rotation.pitch,
-            "yaw": transform.rotation.yaw,
-            "roll": transform.rotation.roll
+            "pitch": transform['pitch'], "yaw": transform['yaw'], "roll": transform['roll']
         }
     }
-    os.makedirs(ego_pose_dir, exist_ok=True)
     pose_path = os.path.join(ego_pose_dir, f"{timestamp}.json")
     with open(pose_path, 'w') as f:
-        json.dump(pose, f, indent=2)
+        json.dump(pose, f, separators=(',', ':'))
+
 
 def generate_map_mask(base_save_path):
-    """Generate map mask using the external generate_map_mask.py script.
-    
-    Args:
-        base_save_path: Directory where the map mask will be saved
-        
-    Returns:
-        bool: True if map generation was successful, False otherwise
-    """
+    """Generate map mask using the external generate_map_mask.py script."""
     print("\n" + "="*60)
     print("GENERATING MAP MASK BEFORE SENSOR DATA COLLECTION")
     print("="*60)
-    
     try:
-        # Check if generate_map_mask.py exists
-        if not os.path.exists(str(Path(__file__).parent / 'generate_map_mask.py')):
+        script = Path(__file__).parent / 'generate_map_mask.py'
+        if not script.exists():
             print("generate_map_mask.py not found in current directory")
             return False
-        
-        # Run the map mask generation script
+
         cmd = [
-            sys.executable,  # Use the same Python interpreter
-            str(Path(__file__).parent / 'generate_map_mask.py'),
+            sys.executable,
+            str(script),
             '--output', base_save_path,
-            '--resolution', 'medium',  # Use medium resolution for good quality
+            '--resolution', 'medium',
             '--altitude', '400.0',
             '--target-resolution', '0.1'
         ]
-        
         print(f"Running command: {' '.join(cmd)}")
-        print("This may take a few minutes depending on map size...")
-        
-        # Run the script and wait for completion with timeout
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,  # 10 minute timeout
-            cwd=os.getcwd()  # Run in current directory
-        )
-        
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=600, cwd=os.getcwd())
         if result.returncode == 0:
-            print("Map mask generation completed successfully!")
-            
-            # Verify that map files were actually created
-            expected_files = []
-            for ext in ['.png', '.json']:
-                pattern = os.path.join(base_save_path, f"*{ext}")
-                files = glob.glob(pattern)
-                expected_files.extend(files)
-            
-            if expected_files:
-                print(f"Created map files: {[os.path.basename(f) for f in expected_files]}")
+            files = (glob.glob(os.path.join(base_save_path, '*.png')) +
+                     glob.glob(os.path.join(base_save_path, '*.json')))
+            if files:
+                print(f"Created map files: {[os.path.basename(f) for f in files]}")
                 return True
-            else:
-                print("Warning: Map generation reported success but no map files found")
-                return False
-        else:
-            print("Map mask generation failed!")
-            print("STDERR:", result.stderr)
-            if result.stdout:
-                print("STDOUT:", result.stdout)
+            print("Warning: map generation reported success but no map files found")
             return False
-            
+        print("Map mask generation failed!")
+        print("STDERR:", result.stderr)
+        return False
     except subprocess.TimeoutExpired:
         print("Map mask generation timed out after 10 minutes")
         return False
@@ -115,6 +156,7 @@ def generate_map_mask(base_save_path):
         return False
     finally:
         print("="*60)
+
 
 def collect_log_info(world, ego_vehicle, base_save_path):
     """Collects and saves simulation log info for NuScenes log.json generation."""
@@ -133,86 +175,88 @@ def collect_log_info(world, ego_vehicle, base_save_path):
     with open(log_info_path, 'w') as f:
         json.dump(log_info, f, indent=2)
 
+
 def main():
-    """ Initialise Carla, configure les paramètres et lance les simulations """
+    """Initialise CARLA, configure sensors, and run data collection."""
+    client = None
+    vehicle_list = []
+
     try:
-        # Charger la configuration depuis le fichier YAML
         with open(ROOT / 'config.yml', 'r') as f:
             config = yaml.safe_load(f)
-        
-        # Process sensor configuration to add instance cameras
-        config["sensors"] = process_sensor_config(config["sensors"])
-        
-        sim_config = config["simulation"]
-        sensors_config = config["sensors"]
-        traffic_config = sim_config.get("traffic", {}) 
 
-        # Simulation frequency (Hz) configurable via config.yml; defaults to 20Hz
+        # Inject instance cameras where collect_bbox is true on an RGB camera.
+        config["sensors"] = process_sensor_config(config["sensors"])
+
+        sim_config     = config["simulation"]
+        sensors_config = config["sensors"]
+        traffic_config = sim_config.get("traffic", {})
+
         frequency_hz = int(sim_config.get("frequency_hz", 20))
         if frequency_hz <= 0:
             raise ValueError("simulation.frequency_hz must be a positive integer")
 
-        num_scenes = sim_config["num_scenes"]
+        num_scenes       = sim_config["num_scenes"]
         seconds_per_scene = sim_config["seconds_per_scene"]
-        ticks_per_scene = int(seconds_per_scene * frequency_hz)  # Configurable-Hz simulation
-        base_save_path = sim_config["base_save_path"]
+        ticks_per_scene  = int(seconds_per_scene * frequency_hz)
+        base_save_path   = sim_config["base_save_path"]
 
-        # Set random seed if specified
-        if "seed" in traffic_config and traffic_config["seed"] is not None:
-            random.seed(traffic_config["seed"])
+        # Build a static blueprint_id map so listeners never re-read config.yml
+        blueprint_id_map = {s["name"]: s["blueprint"] for s in sensors_config}
 
-        # Connexion au client
         client = carla.Client('localhost', 2000)
-        client.set_timeout(20.0)  # Increased timeout
+        client.set_timeout(20.0)
 
-        # Récupération du monde et configuration du mode synchrone
-        world = client.get_world()
+        world    = client.get_world()
         settings = world.get_settings()
-        settings.synchronous_mode = True
-        settings.fixed_delta_seconds = 1.0 / float(frequency_hz)  # Configurable-Hz simulation
+        settings.synchronous_mode   = True
+        settings.fixed_delta_seconds = 1.0 / float(frequency_hz)
         world.apply_settings(settings)
 
-        # Cache static world vehicles once — querying every frame in a sensor callback
-        # causes timing violations in synchronous mode.
+        # Cache static world vehicles once — expensive RPC, never repeat per frame.
         static_vehicles = get_static_vehicle_env_objects(world)
         print(f"Found {len(static_vehicles)} static world vehicles for bbox export.")
 
-        # Ensure the output directory exists
         os.makedirs(base_save_path, exist_ok=True)
 
-        # Setup traffic before starting sensor collection
         print("Setting up traffic...")
         vehicle_list = setup_traffic(client, world, traffic_config)
-        
-        # Let the traffic settle for a few seconds
+
         print("Letting traffic settle...")
-        settle_ticks = max(1, int(round(2.5 * frequency_hz)))  # ~2.5 seconds
+        settle_ticks = max(1, int(round(2.5 * frequency_hz)))
         for _ in range(settle_ticks):
             world.tick()
 
-        # Configuration du traffic manager
         traffic_manager = client.get_trafficmanager(8000)
         traffic_manager.set_synchronous_mode(True)
 
-        scene_paths = []  # Liste pour stocker les dossiers de scènes traitées
-
+        scene_paths = []
         log_info_collected = False
-        ego_vehicle_for_log = None
 
         for scene_id in range(1, num_scenes + 1):
             scene_completed = False
-            max_scene_retries = 3  # Maximum number of retries per scene
-            
+            max_scene_retries = 3
+
             for scene_retry in range(max_scene_retries):
+                sensor_list = []
+                vehicle     = None
+
+                # One executor per scene attempt.  shutdown(wait=True) at the end
+                # of the scene guarantees all file writes are flushed before cleanup.
+                executor = ThreadPoolExecutor(max_workers=IO_WORKERS)
+
+                # Two queues:
+                #   raw_queue  — filled by thin sensor callbacks (CARLA thread)
+                #   done_queue — filled by workers when a frame write finishes
+                raw_queue  = Queue()
+                done_queue = Queue()
+
                 try:
-                    # Create folders and sensor queue
                     sensor_names = [s["name"] for s in sensors_config]
-                    save_path = create_scene_folders(scene_id, sensor_names, base_save_path)
+                    save_path    = create_scene_folders(scene_id, sensor_names, base_save_path)
                     scene_paths.append(save_path)
-                    sensor_queue = Queue()
                     blueprint_library = world.get_blueprint_library()
 
-                    # Try to spawn ego vehicle with retries
                     print(f"\nScene {scene_id} - Attempt {scene_retry + 1}/{max_scene_retries}")
                     try:
                         vehicle = spawn_ego_vehicle(world, blueprint_library, traffic_manager)
@@ -225,156 +269,317 @@ def main():
                             print("Max retries reached, skipping scene")
                             break
 
-                    print("Ego vehicle spawned, waiting for stabilization...")
-                    stabilize_ticks = max(1, int(round(1.0 * frequency_hz)))  # ~1 second
+                    print("Ego vehicle spawned, stabilising...")
+                    stabilize_ticks = max(1, int(round(1.0 * frequency_hz)))
                     for _ in range(stabilize_ticks):
                         world.tick()
 
-                    # Collect log info if not already collected
                     if not log_info_collected:
                         collect_log_info(world, vehicle, base_save_path)
                         log_info_collected = True
-                        ego_vehicle_for_log = vehicle
 
-                    # Setup ego_pose directory
                     ego_pose_dir = os.path.join(save_path, EGO_POSE_FOLDER)
+                    os.makedirs(ego_pose_dir, exist_ok=True)  # once, not per tick
 
-                    # Setup sensors and run simulation
-                    sensor_list = []
-                    for sensor in sensors_config:
-                        bp_sensor = blueprint_library.find(sensor["blueprint"])
-                        for attr, value in sensor["attributes"].items():
+                    # --------------------------------------------------------
+                    # Register sensors with thin callbacks.
+                    # blueprint_id is captured at registration time — the callback
+                    # never opens config.yml.
+                    # actor_snapshot / ego_transform are mutable containers so
+                    # the tick loop can update them in-place and the callback
+                    # closure always sees the latest value.
+                    # --------------------------------------------------------
+                    # We use a list-of-one as a mutable reference so the lambda
+                    # captures the container, not a frozen value.
+                    snapshot_ref    = [{}]   # snapshot_ref[0] = current actor snapshot
+                    ego_tf_ref      = [None] # ego_tf_ref[0]   = current ego transform
+
+                    for sensor_cfg in sensors_config:
+                        bp_sensor = blueprint_library.find(sensor_cfg["blueprint"])
+                        for attr, value in sensor_cfg["attributes"].items():
                             bp_sensor.set_attribute(attr, value)
-                        loc = sensor["transform"]["location"]
-                        rot = sensor["transform"]["rotation"]
+                        loc = sensor_cfg["transform"]["location"]
+                        rot = sensor_cfg["transform"]["rotation"]
                         transform = carla.Transform(
                             carla.Location(x=loc["x"], y=loc["y"], z=loc["z"]),
-                            carla.Rotation(pitch=rot.get("pitch", 0), yaw=rot["yaw"], roll=rot.get("roll", 0))
+                            carla.Rotation(pitch=rot.get("pitch", 0),
+                                           yaw=rot["yaw"],
+                                           roll=rot.get("roll", 0))
                         )
                         actor = world.spawn_actor(bp_sensor, transform, attach_to=vehicle)
                         sensor_list.append(actor)
-                        actor.listen(lambda data, q=sensor_queue, name=sensor["name"], 
-                                    path=save_path, w=world, v=vehicle, s=actor, sv=static_vehicles:
-                                    sensor_callback(data, q, name, path, w, v, s, static_vehicles=sv))
 
-                    # Run simulation and collect ego pose at each tick
-                    print(f"\nStarting data collection for scene {scene_id}...")
-                    print(f"Expected frames: {ticks_per_scene} ({frequency_hz}Hz for {seconds_per_scene} seconds)")
-                    
-                    for tick in range(ticks_per_scene):
+                        _name    = sensor_cfg["name"]
+                        _bp_id   = blueprint_id_map[_name]
+                        actor.listen(
+                            lambda data,
+                                   q=raw_queue,
+                                   name=_name,
+                                   path=save_path,
+                                   bp=_bp_id,
+                                   snap_ref=snapshot_ref,
+                                   etf_ref=ego_tf_ref:
+                            sensor_callback(data, q, name, path, bp,
+                                            snap_ref[0], etf_ref[0])
+                        )
+
+                    # --------------------------------------------------------
+                    # Warm-up ticks — discard data, let sensors stabilise.
+                    # --------------------------------------------------------
+                    WARMUP_TICKS = 10
+                    print(f"Running {WARMUP_TICKS} warm-up ticks...")
+                    for _ in range(WARMUP_TICKS):
                         world.tick()
-                        snapshot = world.get_snapshot()
-                        timestamp = int(snapshot.timestamp.elapsed_seconds * 1000)
-                        save_ego_pose(vehicle, timestamp, ego_pose_dir)
-                        
-                        # Add a small delay between ticks to ensure sensor callbacks complete
-                        time.sleep(0.01)  # 10ms delay between ticks
-                        
-                        if tick % 10 == 0:  # Progress update every 10 frames
-                            print(f"Collected {tick + 1}/{ticks_per_scene} frames")
-
-                    # Wait for all sensor callbacks to complete
-                    print("Waiting for sensor callbacks to complete...")
-                    expected_calls = len(sensor_list) * ticks_per_scene
-                    completed_calls = 0
-                    timeout_counter = 0
-                    max_timeouts = 10  # Increased max timeouts
-                    
-                    while completed_calls < expected_calls and timeout_counter < max_timeouts:
-                        try:
-                            timestamp, sensor_name = sensor_queue.get(timeout=5.0)  # Increased timeout
-                            if timestamp > 0:  # Valid timestamp
-                                completed_calls += 1
-                                if completed_calls % 100 == 0:  # Progress update every 100 calls
-                                    print(f"Completed {completed_calls}/{expected_calls} sensor callbacks")
-                        except Empty:
-                            timeout_counter += 1
-                            print(f"Warning: Timeout {timeout_counter}/{max_timeouts} waiting for sensor callback. Completed {completed_calls}/{expected_calls}")
-                            if timeout_counter >= max_timeouts:
-                                print("Max timeouts reached, proceeding with cleanup")
+                        # Drain any warm-up frames so the queue stays empty
+                        while not raw_queue.empty():
+                            try:
+                                raw_queue.get_nowait()
+                            except Empty:
                                 break
 
-                    # Add a longer delay before cleanup to ensure all file operations are complete
-                    print("Waiting for file operations to complete...")
-                    time.sleep(5.0)  # Increased wait time
-                    
+                    # --------------------------------------------------------
+                    # Main collection tick loop.
+                    # Per tick:
+                    #   1. world.tick()  — advance simulation, callbacks fire
+                    #   2. Build actor snapshot from world_snapshot (zero RPC)
+                    #   3. Save ego pose (main thread, blocking but tiny)
+                    #   4. Drain raw_queue — submit each frame to the executor
+                    # --------------------------------------------------------
+                    print(f"\nStarting data collection for scene {scene_id}...")
+                    print(f"Expected frames: {ticks_per_scene} "
+                          f"({frequency_hz}Hz × {seconds_per_scene}s)")
+
+                    # Cache static actor metadata once — type_id + bounding_box
+                    # never change, so we avoid world.get_actors() every tick.
+                    actor_static_cache = build_actor_static_cache(world, vehicle.id)
+                    print(f"Actor cache built: {len(actor_static_cache)} NPC actors")
+
+                    pending_futures = []
+
+                    for tick in range(ticks_per_scene):
+                        # --------------------------------------------------------
+                        # Backpressure: if too many futures are pending, wait for
+                        # the oldest ones to finish before advancing the simulation.
+                        # This caps memory usage and prevents OOM crashes.
+                        # --------------------------------------------------------
+                        if len(pending_futures) >= MAX_PENDING_FUTURES:
+                            cutoff = len(pending_futures) // 2
+                            for f in pending_futures[:cutoff]:
+                                try:
+                                    f.result(timeout=10.0)
+                                except Exception:
+                                    pass
+                            pending_futures = [f for f in pending_futures[cutoff:]
+                                               if not f.done()]
+
+                        world.tick()
+
+                        world_snap = world.get_snapshot()
+                        timestamp = int(world_snap.timestamp.elapsed_seconds * 1000)
+
+                        # Build actor snapshot from world_snapshot — zero RPC calls.
+                        actor_snap    = build_actor_snapshot(actor_static_cache, world_snap)
+                        # Ego transform: use world snapshot (zero RPC).
+                        ego_snap = world_snap.find(vehicle.id)
+                        if ego_snap is not None:
+                            _et = ego_snap.get_transform()
+                        else:
+                            _et = vehicle.get_transform()
+                        # Serialize to plain Python — no carla C++ object crosses thread boundary
+                        ego_transform = {
+                            'x': _et.location.x, 'y': _et.location.y, 'z': _et.location.z,
+                            'pitch': _et.rotation.pitch, 'yaw': _et.rotation.yaw, 'roll': _et.rotation.roll,
+                            'matrix': [list(row) for row in _et.get_matrix()],
+                        }
+
+                        # Update shared references so the NEXT callback invocations
+                        # (which may not have fired yet) see the fresh snapshot.
+                        # Callbacks that already fired this tick already captured
+                        # their snapshot via the closure at call time.
+                        snapshot_ref[0] = actor_snap
+                        ego_tf_ref[0]   = ego_transform
+
+                        # Ego pose — directory already created above.
+                        save_ego_pose(ego_transform, timestamp, ego_pose_dir)
+
+                        # Drain raw sensor queue — submit writes to executor.
+                        drained = 0
+                        while not raw_queue.empty():
+                            try:
+                                item = raw_queue.get_nowait()
+                            except Empty:
+                                break
+                            (s_payload, s_ts, s_name, s_path,
+                             s_bp, s_snap, s_etf) = item
+                            f = executor.submit(
+                                write_sensor_data,
+                                s_payload, s_ts, s_name, s_path, s_bp,
+                                s_snap, s_etf,
+                                static_vehicles, done_queue
+                            )
+                            pending_futures.append(f)
+                            drained += 1
+
+                        if tick % 10 == 0:
+                            pending_futures = [f for f in pending_futures if not f.done()]
+                            print(f"  Tick {tick + 1}/{ticks_per_scene} "
+                                  f"— queued {drained} frames, "
+                                  f"{len(pending_futures)} futures pending")
+
+                    # --------------------------------------------------------
+                    # Scene done — wait for all worker writes to finish.
+                    # --------------------------------------------------------
+                    print("Flushing I/O workers...")
+                    executor.shutdown(wait=True)
+                    print(f"Scene {scene_id} complete — all frames written.")
+
                     scene_completed = True
-                    break  # Scene completed successfully, exit retry loop
+                    break  # exit retry loop
 
                 except Exception as e:
+                    import traceback
                     print(f"Error during scene {scene_id}: {e}")
+                    traceback.print_exc()
+                    # Shut executor down cleanly even on error
+                    try:
+                        executor.shutdown(wait=False)
+                    except Exception:
+                        pass
                     if scene_retry < max_scene_retries - 1:
                         print("Retrying scene...")
-                        continue
                     else:
                         print("Max retries reached, skipping scene")
+
                 finally:
-                    # Add a longer delay before cleanup to allow pending operations
-                    print("Waiting before cleanup...")
-                    time.sleep(5.0)  # Increased wait time
-                    
-                    # Cleanup if needed
-                    if 'vehicle' in locals() and vehicle is not None:
+                    # ----------------------------------------------------------
+                    # Cleanup order matters:
+                    #   1. Stop all sensor listeners (no more callbacks fire).
+                    #   2. Tick once so CARLA server processes the stop commands
+                    #      and flushes any in-flight callbacks.
+                    #   3. Drain the raw_queue so no orphaned items remain.
+                    #   4. Wait for executor workers to finish (they may hold refs
+                    #      to CARLA data objects — don't destroy actors beneath them).
+                    #   5. Destroy sensors, tick, destroy vehicle, tick.
+                    #      Two ticks give the server time to GC each batch.
+                    # ----------------------------------------------------------
+
+                    # Step 1 — stop listeners.
+                    for sensor in sensor_list:
                         try:
-                            vehicle.get_transform()  # Check if vehicle is still alive
-                            vehicle.destroy()
+                            if sensor.is_alive:
+                                sensor.stop()
                         except Exception:
-                            print("Vehicle already destroyed")
-                            
-                    if 'sensor_list' in locals():
-                        for sensor in sensor_list:
-                            try:
-                                sensor.get_transform()  # Check if sensor is still alive
+                            pass
+
+                    # Step 2 — tick to flush in-flight callbacks.
+                    try:
+                        world.tick()
+                    except Exception:
+                        pass
+
+                    # Step 3 — drain raw_queue (discard; scene is ending).
+                    while not raw_queue.empty():
+                        try:
+                            raw_queue.get_nowait()
+                        except Exception:
+                            break
+
+                    # Step 4 — wait for all I/O workers to finish.
+                    try:
+                        executor.shutdown(wait=True)
+                    except Exception:
+                        pass
+
+                    # Step 5a — destroy sensors.
+                    for sensor in sensor_list:
+                        try:
+                            if sensor.is_alive:
                                 sensor.destroy()
-                            except Exception:
-                                print(f"Sensor {sensor.type_id} already destroyed")
-                    
-                    # Add another delay after cleanup
-                    print("Waiting after cleanup...")
-                    time.sleep(5.0)  # Increased wait time
+                        except Exception:
+                            pass
+                    sensor_list.clear()
+
+                    # Tick so server processes sensor destructions.
+                    try:
+                        world.tick()
+                    except Exception:
+                        pass
+
+                    # Step 5b — destroy ego vehicle.
+                    if vehicle is not None:
+                        try:
+                            if vehicle.is_alive:
+                                vehicle.destroy()
+                        except Exception:
+                            pass
+                        vehicle = None
+
+                    # Tick so server processes vehicle destruction.
+                    try:
+                        world.tick()
+                    except Exception:
+                        pass
 
             if not scene_completed:
                 print(f"Failed to complete scene {scene_id} after {max_scene_retries} attempts")
+            else:
+                # Let the server settle between scenes before spawning new actors.
+                print("Letting server settle before next scene...")
+                settle_between = max(1, int(round(1.0 * frequency_hz)))
+                for _ in range(settle_between):
+                    try:
+                        world.tick()
+                    except Exception:
+                        break
 
-        # Nettoyer toutes les scènes après la fin des simulations
+        # ------------------------------------------------------------------
+        # Post-collection: clean up partial frames, then run 2D bbox annotation
+        # (only for cameras with collect_bbox: true — default is false).
+        # ------------------------------------------------------------------
         for path in scene_paths:
-            print("Nettoyage du dataset pour la scène", path)
+            print(f"Cleaning scene data: {path}")
             sensors_for_cleanup = list(sensor_names) + [EGO_POSE_FOLDER]
             clean_scene_data(path, sensors_for_cleanup)
-        print("Toutes les scènes ont été nettoyées avec succès !")
-        
-        # 2D bounding box annotation — runs only for cameras with collect_bbox: true in config.yml
-        # Bicycle (CARLA tag 19) is intentionally excluded from detection tags.
+        print("All scenes cleaned.")
+
         for path in scene_paths:
             process_scene(path)
-    
+
     except KeyboardInterrupt:
-        print(" - Interrompu par l'utilisateur.")
+        print(" - Interrupted by user.")
     except Exception as e:
-        print(f"Erreur lors de l'initialisation: {e}")
+        print(f"Fatal error during initialisation: {e}")
+        import traceback; traceback.print_exc()
 
     finally:
-        # Clean up traffic first
-        print('\nDestroying traffic...')
-        try:
-            client.apply_batch([carla.command.DestroyActor(x) for x in vehicle_list])
-        except Exception as e:
-            print(f"Warning: Failed to destroy some traffic actors: {e}")
-        time.sleep(0.5)
+        # Destroy traffic actors.
+        if vehicle_list:
+            print('\nDestroying traffic...')
+            try:
+                client.apply_batch([carla.command.DestroyActor(x) for x in vehicle_list])
+            except Exception as e:
+                print(f"Warning: Failed to destroy some traffic actors: {e}")
+            time.sleep(0.5)
 
-        # Generate map mask AFTER simulation and traffic cleanup
+        # Generate map mask after all simulation and traffic are gone.
         try:
-            if 'base_save_path' in locals() and isinstance(base_save_path, str) and len(base_save_path) > 0:
-                print(f"\nGenerating map mask after simulation for {client.get_world().get_map().name}...")
-                map_generation_success = generate_map_mask(base_save_path)
-                if map_generation_success:
-                    print("Map mask generation completed successfully at end of pipeline.")
+            if 'base_save_path' in locals() and base_save_path:
+                print(f"\nGenerating map mask...")
+                success = generate_map_mask(base_save_path)
+                if not success:
+                    print("WARNING: Map mask generation failed.")
+                    print("  The converter will not be able to produce a valid map PNG.")
+                    print("  Re-run collection while CARLA is running, or manually run:")
+                    print(f"  python collection/generate_map_mask.py --output {base_save_path}")
                 else:
-                    print("Map mask generation failed at end of pipeline. You can run generate_map_mask.py manually later.")
-            else:
-                print("Skipping map mask generation: base_save_path unavailable.")
+                    import glob as _glob
+                    basemaps = _glob.glob(os.path.join(base_save_path, '*_basemap.png'))
+                    if not basemaps:
+                        print("WARNING: generate_map_mask reported success but no *_basemap.png found.")
+                        print(f"  Expected a file matching {base_save_path}/*_basemap.png")
         except Exception as e:
-            print(f"Error generating map mask at end of pipeline: {e}")
+            print(f"Error generating map mask: {e}")
+
 
 if __name__ == "__main__":
     main()
