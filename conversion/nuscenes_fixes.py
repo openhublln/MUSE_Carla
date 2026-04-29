@@ -207,63 +207,45 @@ class NuScenesFixes:
         print("3. Fixing sample data mapping...")
         
         sample_file = self.version_dir / 'sample.json'
-        sample_data_file = self.version_dir / 'sample_data.json'
         
-        if not sample_file.exists() or not sample_data_file.exists():
-            print("  Warning: sample.json or sample_data.json not found")
+        if not sample_file.exists():
+            print("  Warning: sample.json not found")
             return
         
         with open(sample_file, 'r') as f:
             samples = json.load(f)
-        with open(sample_data_file, 'r') as f:
-            sample_data = json.load(f)
         
-        # Create lookup for sample_data by sample_token and channel
-        sample_data_lookup = {}
-        for sd in sample_data:
-            sample_token = sd['sample_token']
-            if sample_token not in sample_data_lookup:
-                sample_data_lookup[sample_token] = {}
-            
-            # Extract channel from filename
-            filename = sd['filename']
-            if '/' in filename:
-                channel = filename.split('/')[1]  # samples/CAM_FRONT/123.jpg -> CAM_FRONT
-                sample_data_lookup[sample_token][channel] = sd['token']
-        
-        # Update samples with data field
+        # Strip non-standard fields from every sample entry
         for sample in samples:
-            sample_token = sample['token']
-            # The following lines are removed to avoid adding the non-standard 'data' field:
-            # if sample_token in sample_data_lookup:
-            #     sample['data'] = sample_data_lookup[sample_token]
-            #     updated_count += 1
+            sample.pop('anns', None)
+            sample.pop('data', None)
         
         with open(sample_file, 'w') as f:
             json.dump(samples, f, indent=2)
         
-        print(f"  Checked {len(samples)} samples for data field mappings (no 'data' field added)")
+        print(f"  Stripped 'anns' and 'data' fields from {len(samples)} samples")
     
     def fix_camera_intrinsics(self):
         """Fix camera intrinsic matrices in calibrated_sensor.json using config.yml values."""
         print("4. Fixing camera intrinsic matrices...")
-        
+
         calibrated_file = self.version_dir / 'calibrated_sensor.json'
         sensor_file = self.version_dir / 'sensor.json'
         config_file = ROOT / 'config.yml'
-        
+        converter_config_file = ROOT / 'converter_config.yml'
+
         if not calibrated_file.exists() or not sensor_file.exists() or not config_file.exists():
             print("  Warning: calibrated_sensor.json, sensor.json, or config.yml not found")
             return
-        
+
         with open(calibrated_file, 'r') as f:
             calibrated_sensors = json.load(f)
         with open(sensor_file, 'r') as f:
             sensors = json.load(f)
         with open(config_file, 'r') as f:
             config = yaml.safe_load(f)
-        
-        # Build a mapping from sensor name to attributes for cameras
+
+        # Build camera_params: sensor_name -> {image_size_x, image_size_y, fov}
         camera_params = {}
         for sensor in config.get('sensors', []):
             if sensor.get('type') == 'camera':
@@ -274,79 +256,70 @@ class NuScenesFixes:
                     image_size_y = float(attrs.get('image_size_y', 600))
                     fov = float(attrs.get('fov', 90))
                 except Exception:
-                    image_size_x, image_size_y, fov = 800, 600, 90
+                    image_size_x, image_size_y, fov = 800.0, 600.0, 90.0
                 camera_params[name] = {
                     'image_size_x': image_size_x,
                     'image_size_y': image_size_y,
-                    'fov': fov
+                    'fov': fov,
                 }
-        # Map sensor_token to channel, name, and modality
+
+        # Build channel -> sensor_name reverse map using converter_config sensor_mappings
+        channel_to_sensor_name = {}
+        if converter_config_file.exists():
+            with open(converter_config_file, 'r') as f:
+                conv_cfg = yaml.safe_load(f)
+            for sensor_name, channel in conv_cfg.get('sensor_mappings', {}).get('camera', {}).items():
+                channel_to_sensor_name[channel] = sensor_name
+
+        # Map sensor_token -> channel and modality from sensor.json
         sensor_token_to_channel = {s['token']: s['channel'] for s in sensors}
         sensor_token_to_modality = {s['token']: s['modality'] for s in sensors}
-        
-        # First, clean up any unwanted fields and ensure proper initialization
-        for calibrated_sensor in calibrated_sensors:
-            sensor_token = calibrated_sensor.get('sensor_token')
-            modality = sensor_token_to_modality.get(sensor_token, '')
-            
-            # Remove unwanted camera_frame_correction field (not part of official NuScenes format)
-            if 'camera_frame_correction' in calibrated_sensor:
-                del calibrated_sensor['camera_frame_correction']
-            
-            # Ensure non-camera sensors have empty camera_intrinsic
-            if modality != 'camera':
-                calibrated_sensor['camera_intrinsic'] = []
-        
-        # For each CAMERA calibrated sensor, compute and set the intrinsic matrix
+
+        # Remove stale fields, reset camera_intrinsic
+        for cs in calibrated_sensors:
+            if 'camera_frame_correction' in cs:
+                del cs['camera_frame_correction']
+            sensor_token = cs.get('sensor_token')
+            if sensor_token_to_modality.get(sensor_token, '') != 'camera':
+                cs['camera_intrinsic'] = []
+
+        # Compute and set intrinsics for each camera
         fixed_count = 0
-        for calibrated_sensor in calibrated_sensors:
-            sensor_token = calibrated_sensor.get('sensor_token')
-            channel = sensor_token_to_channel.get(sensor_token, '')
+        for cs in calibrated_sensors:
+            sensor_token = cs.get('sensor_token')
             modality = sensor_token_to_modality.get(sensor_token, '')
-            
-            # Only process camera sensors
             if modality != 'camera':
                 continue
-                
-            # Map nuScenes channel to config name with robust underscore-insensitive matching
-            # e.g. CAM_FRONT_RIGHT -> Camera_FrontRight
-            config_name = None
-            normalized_channel = channel.replace('_', '') if isinstance(channel, str) else ''
-            for name in camera_params:
-                candidate = name.upper().replace('CAMERA_', 'CAM_')
-                if candidate == channel:
-                    config_name = name
-                    break
-            if not config_name:
-                for name in camera_params:
-                    candidate_no_us = name.upper().replace('CAMERA_', 'CAM_').replace('_', '')
-                    if candidate_no_us == normalized_channel:
-                        config_name = name
-                        break
-            if not config_name:
-                # Fallback: suffix containment ignoring underscores
-                for name in camera_params:
-                    suffix = name.split('_')[-1].upper().replace('_', '')
-                    if suffix and suffix in normalized_channel:
-                        config_name = name
-                        break
-            if config_name:
-                params = camera_params[config_name]
-                w = params['image_size_x']
-                h = params['image_size_y']
-                fov = params['fov']
-                fx = w / (2 * np.tan(np.deg2rad(fov) / 2))
-                fy = h / (2 * np.tan(np.deg2rad(fov) / 2))
-                cx = w / 2
-                cy = h / 2
-                intrinsic = [
-                    [fx, 0.0, cx],
-                    [0.0, fy, cy],
-                    [0.0, 0.0, 1.0]
-                ]
-                calibrated_sensor['camera_intrinsic'] = intrinsic
-                print(f"  Set camera intrinsics for {channel}: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
-                fixed_count += 1
+
+            channel = sensor_token_to_channel.get(sensor_token, '')
+            sensor_name = channel_to_sensor_name.get(channel)
+
+            if sensor_name and sensor_name in camera_params:
+                params = camera_params[sensor_name]
+            else:
+                # Fallback: use first camera's params (all cameras share same resolution/fov here)
+                if camera_params:
+                    params = next(iter(camera_params.values()))
+                    print(f"  Warning: no exact match for channel '{channel}', using fallback params")
+                else:
+                    print(f"  Warning: no camera params found for channel '{channel}', skipping")
+                    continue
+
+            w = params['image_size_x']
+            h = params['image_size_y']
+            fov = params['fov']
+            fx = w / (2 * np.tan(np.deg2rad(fov) / 2))
+            fy = h / (2 * np.tan(np.deg2rad(fov) / 2))
+            cx = w / 2.0
+            cy = h / 2.0
+            cs['camera_intrinsic'] = [
+                [fx, 0.0, cx],
+                [0.0, fy, cy],
+                [0.0, 0.0, 1.0],
+            ]
+            print(f"  Set intrinsics for {channel}: fx={fx:.1f}, fy={fy:.1f}, cx={cx:.1f}, cy={cy:.1f}")
+            fixed_count += 1
+
         with open(calibrated_file, 'w') as f:
             json.dump(calibrated_sensors, f, indent=2)
         print(f"  Fixed camera intrinsic matrices for {fixed_count} camera sensors")
@@ -388,85 +361,51 @@ class NuScenesFixes:
         print(f"  Removed {removed_count} problematic LIDAR points")
     
     def fix_map_file(self):
-        """Fix map file reference."""
+        """Fix map filename to flat maps/<token>.png as expected by NuScenes DevKit."""
         print("6. Fixing map file...")
-        
+
         map_file = self.version_dir / 'map.json'
         if not map_file.exists():
             print("  Warning: map.json not found")
             return
-        
+
         with open(map_file, 'r') as f:
             maps = json.load(f)
-        
-        print(f"  Current map.json content: {maps[0] if maps else 'No maps found'}")
-        
-        # First check if the current filename is already valid and not the default
-        if maps and maps[0].get('filename', 'maps/none.png') != 'maps/none.png':
-            current_filename = maps[0]['filename']
-            full_path = self.output_base / current_filename
-            if full_path.exists():
-                print(f"Map filename already correctly set: {current_filename}")
-                print(f"File exists at: {full_path}")
-                return  # Don't modify anything if it's already correct
-            else:
-                print(f"Current filename points to missing file: {full_path}")
-        
-        # Check if there's an actual map file in the maps directory
-        if maps:
-            maps_dir = self.output_base / 'maps'
-            print(f"  Checking maps directory: {maps_dir}")
-            print(f"  Maps directory exists: {maps_dir.exists()}")
-            
-            if maps_dir.exists():
-                all_items = list(maps_dir.iterdir())
-                print(f"  Contents of maps directory: {[item.name for item in all_items]}")
-            
-            # Look for actual map directories (not none.png)
-            actual_map_dirs = [d for d in maps_dir.iterdir() if d.is_dir()]
-            print(f"  Found {len(actual_map_dirs)} map directories: {[d.name for d in actual_map_dirs]}")
-            
-            if actual_map_dirs:
-                # Use the first actual map directory found (preserves original name)
-                map_dir = actual_map_dirs[0]
-                map_name = map_dir.name  # This will be the original CARLA map name
-                
-                # Look for the basemap file
-                basemap_files = list(map_dir.glob('*_basemap.png'))
-                if basemap_files:
-                    basemap_file = basemap_files[0]
-                    maps[0]['category'] = map_name
-                    maps[0]['filename'] = f'maps/{map_name}/{basemap_file.name}'
-                    print(f"  Updated map to use original map name: {map_name}")
-                    
-                    # Verify the file exists
-                    full_path = self.output_base / maps[0]['filename']
-                    if full_path.exists():
-                        print(f"Verified map file exists at: {full_path}")
-                    else:
-                        print(f"Warning: Map file not found at: {full_path}")
-                        maps[0]['filename'] = 'maps/none.png'
-                        print("Falling back to default map")
-                else:
-                    maps[0]['filename'] = 'maps/none.png'
-                    print("  No basemap file found, using fallback")
-            else:
-                # Check if current filename is already correct (from _setup_map_files)
-                current_filename = maps[0].get('filename', 'maps/none.png')
-                if current_filename != 'maps/none.png':
-                    # Verify the current filename points to an existing file
-                    full_path = self.output_base / current_filename
-                    if full_path.exists():
-                        print(f"Current map filename is valid: {current_filename}")
-                        return  # Don't change anything if current path is valid
-                
-                maps[0]['filename'] = 'maps/none.png'
-                print("  No actual map directories found, using fallback")
-        
+
+        if not maps:
+            print("  Warning: map.json is empty")
+            return
+
+        map_token = maps[0]['token']
+        target_filename = f"maps/{map_token}.png"
+        target_path = self.output_base / target_filename
+
+        # If already correctly set and file exists, nothing to do
+        if maps[0].get('filename') == target_filename and target_path.exists():
+            print(f"  Map already correctly set: {target_filename}")
+            return
+
+        # Find the basemap PNG anywhere under maps/
+        maps_dir = self.output_base / 'maps'
+        basemap_candidates = list(maps_dir.rglob('*_basemap.png'))
+        if not basemap_candidates:
+            print("  Warning: no *_basemap.png found under maps/, keeping fallback")
+            maps[0]['filename'] = 'maps/none.png'
+            with open(map_file, 'w') as f:
+                json.dump(maps, f, indent=2)
+            return
+
+        source_path = basemap_candidates[0]
+
+        # Copy to flat location maps/<token>.png
+        shutil.copy2(source_path, target_path)
+        maps[0]['filename'] = target_filename
+        maps[0]['category'] = 'semantic_prior'
+
         with open(map_file, 'w') as f:
             json.dump(maps, f, indent=2)
-        
-        print("  Updated map.json with correct filename")
+
+        print(f"  Map file set to: {target_filename}")
     
     def cleanup_empty_directories(self):
         """Remove empty sweeps directories and other empty folders."""

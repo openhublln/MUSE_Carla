@@ -67,7 +67,7 @@ class SampleGenerator:
             sample_token = generate_token()
             sample = {
                 "token": sample_token,
-                "timestamp": timestamp,
+                "timestamp": self.converter.epoch_base_us + timestamp * 1000,
                 "scene_token": scene_token,
                 "prev": scene_samples[-1]["token"] if i > 0 else "",
                 "next": "",

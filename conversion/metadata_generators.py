@@ -18,7 +18,6 @@ class MetadataGenerators:
                 "token": token,
                 "name": nuscene_name,
                 "description": description,
-                "index": None  # TODO later
             }
             self.converter.categories.append(category_entry)
 

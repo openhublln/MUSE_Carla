@@ -1,4 +1,5 @@
 import json
+import threading
 from pathlib import Path
 from bisect import bisect_left
 from nuscene_utils import generate_token, carla_rotation_to_nuscenes_quaternion, adjust_z_for_ego_pose
@@ -122,15 +123,17 @@ class SampleDataGenerator:
                     
                     # Use actual world coordinates for ego pose (not hardcoded origin)
                     token = generate_token()
+                    timestamp_us = self.converter.epoch_base_us + timestamp * 1000
                     ego_pose_entry = {
                         "token": token,
-                        "timestamp": timestamp,
+                        "timestamp": timestamp_us,
                         "translation": translation,  # Use actual world position
                         "rotation": rotation  # Use actual world orientation
                     }
                     
                     self.converter.ego_poses.append(ego_pose_entry)
                     # Track per-scene ego pose token to avoid cross-scene collisions
+                    # Key uses raw ms timestamp so look-ups by CARLA timestamp still work
                     try:
                         self.converter.token_maps['ego_pose'][(scene_folder, timestamp)] = token
                     except Exception:
@@ -215,6 +218,8 @@ class SampleDataGenerator:
 
         ego_pose_dir = scene_path / self.converter.EGO_POSE_FOLDER
         ego_pose_timestamps = {}
+        ego_pose_data = {}
+        ego_pose_lock = threading.Lock()
         if ego_pose_dir.exists():
             # Map only timestamps present in this scene's ego_pose folder
             for pose_file in ego_pose_dir.glob("*.json"):
@@ -223,6 +228,19 @@ class SampleDataGenerator:
                     token = self.converter.token_maps.get('ego_pose', {}).get((scene_folder, ts), "")
                     if token:
                         ego_pose_timestamps[ts] = token
+                    with open(pose_file, 'r') as pf:
+                        pd = json.load(pf)
+                    translation = [
+                        float(pd["translation"]["x"]),
+                        -float(pd["translation"]["y"]),
+                        float(pd["translation"]["z"])
+                    ]
+                    rotation = carla_rotation_to_nuscenes_quaternion(
+                        float(pd["rotation"]["roll"]),
+                        float(pd["rotation"]["pitch"]),
+                        float(pd["rotation"]["yaw"])
+                    )
+                    ego_pose_data[ts] = {"translation": translation, "rotation": rotation}
                 except Exception:
                     continue
 
@@ -308,6 +326,22 @@ class SampleDataGenerator:
 
                     ego_pose_token_local = ego_pose_timestamps.get(timestamp_local, "")
 
+                    # Create a new unique ego_pose entry for this sample_data file (1:1 ratio)
+                    ep_data = ego_pose_data.get(timestamp_local)
+                    if ep_data:
+                        ep_token = generate_token()
+                        new_ep = {
+                            "token": ep_token,
+                            "timestamp": timestamp_local,
+                            "translation": ep_data["translation"],
+                            "rotation": ep_data["rotation"],
+                        }
+                        with ego_pose_lock:
+                            self.converter.ego_poses.append(new_ep)
+                        ego_pose_token_local = ep_token
+                    else:
+                        ego_pose_token_local = ""
+
                     # Convert/copy
                     if sensor_type == "camera":
                         img = Image.open(file_path)
@@ -371,7 +405,7 @@ class SampleDataGenerator:
                         "fileformat": fileformat,
                         "width": width,
                         "height": height,
-                        "timestamp": timestamp_local,
+                        "timestamp": self.converter.epoch_base_us + timestamp_local * 1000,
                         "is_key_frame": is_key_frame_local,
                         "next": "",
                         "prev": ""

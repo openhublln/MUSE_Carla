@@ -222,6 +222,15 @@ class NuScenesConverter:
         with open(sim_config_path, 'r') as f:
             self.sim_config = yaml.safe_load(f)
 
+        # Load epoch base from log_info.json written at collection time
+        log_info_path = self.input_base / 'log_info.json'
+        if log_info_path.exists():
+            with open(log_info_path, 'r') as f:
+                log_info = json.load(f)
+            self.epoch_base_us = int(log_info.get('start_time_unix', 0) * 1_000_000)
+        else:
+            self.epoch_base_us = 0
+
         # Load converter config (already loaded in __init__)
         self.converter_config = self.config
 
@@ -739,41 +748,6 @@ class NuScenesConverter:
         except Exception as e:
             print(f"Warning: Failed to create vector map files: {e}")
 
-    def _backfill_sample_fields(self):
-        """Populate sample['anns'] and sample['data'] from generated tables.
-        
-        sample['anns']  -> list of sample_annotation tokens for this sample
-        sample['data']  -> dict mapping channel name to sample_data token (keyframes only)
-        """
-        # Build sample_token -> [annotation_token, ...]
-        anns_by_sample: Dict[str, List[str]] = {}
-        for ann in self.sample_annotations:
-            st = ann['sample_token']
-            anns_by_sample.setdefault(st, []).append(ann['token'])
-
-        # Build calibrated_sensor_token -> channel name
-        # sensor_token -> channel
-        sensor_token_to_channel: Dict[str, str] = {s['token']: s['channel'] for s in self.sensors}
-        # calibrated_sensor_token -> sensor_token
-        cs_to_sensor: Dict[str, str] = {cs['token']: cs['sensor_token'] for cs in self.calibrated_sensors}
-
-        # Build sample_token -> {channel: sd_token} (only keyframes)
-        data_by_sample: Dict[str, Dict[str, str]] = {}
-        for sd in self.sample_data:
-            if not sd.get('is_key_frame'):
-                continue
-            st = sd['sample_token']
-            cs_token = sd.get('calibrated_sensor_token', '')
-            sensor_tok = cs_to_sensor.get(cs_token, '')
-            channel = sensor_token_to_channel.get(sensor_tok, '')
-            if channel:
-                data_by_sample.setdefault(st, {})[channel] = sd['token']
-
-        for sample in self.samples:
-            st = sample['token']
-            sample['anns'] = anns_by_sample.get(st, [])
-            sample['data'] = data_by_sample.get(st, {})
-
     def _write_all_tables(self):
         """Write all NuScenes tables to their respective JSON files."""
         # Link logs to map (map.log_tokens should contain log tokens)
@@ -791,9 +765,6 @@ class NuScenesConverter:
 
         # --- Setup map files and update map record ---
         self._setup_map_files()
-
-        # Backfill sample anns + data fields now that all tables exist
-        self._backfill_sample_fields()
 
         # Create tables dictionary AFTER map setup to capture updated map record
         tables = {

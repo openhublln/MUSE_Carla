@@ -126,7 +126,8 @@ def collect_log_info(world, ego_vehicle, base_save_path):
         "logfile": logfile,
         "vehicle": vehicle_blueprint,
         "date_captured": date_captured,
-        "location": map_name
+        "location": map_name,
+        "start_time_unix": time.time()
     }
     log_info_path = os.path.join(base_save_path, LOG_INFO_FILENAME)
     with open(log_info_path, 'w') as f:
