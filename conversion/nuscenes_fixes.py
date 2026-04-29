@@ -361,7 +361,7 @@ class NuScenesFixes:
         print(f"  Removed {removed_count} problematic LIDAR points")
     
     def fix_map_file(self):
-        """Fix map filename to flat maps/<token>.png as expected by NuScenes DevKit."""
+        """Verify map filename is flat maps/<token>.png as expected by NuScenes DevKit."""
         print("6. Fixing map file...")
 
         map_file = self.version_dir / 'map.json'
@@ -380,32 +380,14 @@ class NuScenesFixes:
         target_filename = f"maps/{map_token}.png"
         target_path = self.output_base / target_filename
 
-        # If already correctly set and file exists, nothing to do
-        if maps[0].get('filename') == target_filename and target_path.exists():
-            print(f"  Map already correctly set: {target_filename}")
-            return
-
-        # Find the basemap PNG anywhere under maps/
-        maps_dir = self.output_base / 'maps'
-        basemap_candidates = list(maps_dir.rglob('*_basemap.png'))
-        if not basemap_candidates:
-            print("  Warning: no *_basemap.png found under maps/, keeping fallback")
-            maps[0]['filename'] = 'maps/none.png'
+        if target_path.exists():
+            maps[0]['filename'] = target_filename
+            maps[0]['category'] = 'semantic_prior'
             with open(map_file, 'w') as f:
                 json.dump(maps, f, indent=2)
-            return
-
-        source_path = basemap_candidates[0]
-
-        # Copy to flat location maps/<token>.png
-        shutil.copy2(source_path, target_path)
-        maps[0]['filename'] = target_filename
-        maps[0]['category'] = 'semantic_prior'
-
-        with open(map_file, 'w') as f:
-            json.dump(maps, f, indent=2)
-
-        print(f"  Map file set to: {target_filename}")
+            print(f"  Map file set to: {target_filename}")
+        else:
+            print(f"  Warning: expected map PNG not found at {target_path}")
     
     def cleanup_empty_directories(self):
         """Remove empty sweeps directories and other empty folders."""
