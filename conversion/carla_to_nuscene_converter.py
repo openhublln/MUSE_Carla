@@ -585,8 +585,9 @@ class NuScenesConverter:
 
     def _setup_map_files(self):
         """
-        Copies the basemap PNG to maps/<token>.png (flat NuScenes mini format)
-        and updates the internal map record.  No subdirectories or JSON files.
+        Copies the basemap PNG (written by generate_map_mask.py during collection)
+        to maps/<token>.png (flat NuScenes mini format) and updates the map record.
+        The basemap must already exist in _out/ — this method never connects to CARLA.
         """
         dest_maps_dir = self.output_base / 'maps'
         dest_maps_dir.mkdir(parents=True, exist_ok=True)
@@ -594,20 +595,21 @@ class NuScenesConverter:
         map_token = self.maps[0]['token'] if self.maps else None
         map_filename = 'maps/none.png'
 
-        try:
-            # Locate basemap PNG in _out/
-            basemap_candidates = list(self.input_base.glob('*_basemap.png'))
-            if not basemap_candidates:
-                raise FileNotFoundError("No *_basemap.png found in input directory")
-
+        basemap_candidates = list(self.input_base.glob('*_basemap.png'))
+        if basemap_candidates:
             source_mask_path = basemap_candidates[0]
             dest_mask_path = dest_maps_dir / f"{map_token}.png"
             shutil.copy(source_mask_path, dest_mask_path)
             map_filename = f'maps/{map_token}.png'
             print(f"Map file copied to: {dest_mask_path}")
-
-        except Exception as e:
-            print(f"Warning: map setup failed ({e}). Falling back to none.png.")
+        else:
+            print(
+                f"ERROR: No *_basemap.png found in {self.input_base}.\n"
+                "  The map PNG is generated during data collection (requires CARLA).\n"
+                "  Re-run collection while CARLA is running to produce the basemap,\n"
+                "  then re-run the converter.\n"
+                "  Falling back to a placeholder none.png — map will be invalid."
+            )
             fallback = dest_maps_dir / 'none.png'
             if not fallback.exists():
                 from PIL import Image
