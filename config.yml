@@ -1,8 +1,8 @@
 simulation:
   num_scenes: 2
   seconds_per_scene: 20
-  frequency_hz: 2
-  base_save_path: ./_out
+  frequency_hz: 10
+  base_save_path: ./data/_out
   traffic:
     num_vehicles: 30
     num_pedestrians: 10

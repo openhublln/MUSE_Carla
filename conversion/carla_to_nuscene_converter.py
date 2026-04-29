@@ -82,13 +82,13 @@ class NuScenesConverter:
         self.config = self._load_config(config_path)
         self.version = self.config['version']
         
-        # Set input base to the _out directory
-        self.input_base = Path('_out')
+        # Set input base from config (fallback: _out)
+        self.input_base = Path(self.config.get('input', {}).get('base_dir', '_out'))
         if not self.input_base.exists():
-            raise FileNotFoundError(f"Input directory '_out' not found at {self.input_base.absolute()}")
+            raise FileNotFoundError(f"Input directory not found at {self.input_base.absolute()}")
             
-        # Set output base to nuscenes_format
-        self.output_base = Path('nuscenes_format')
+        # Set output base from config (fallback: nuscenes_format)
+        self.output_base = Path(self.config.get('output', {}).get('base_dir', 'nuscenes_format'))
         self.output_base.mkdir(parents=True, exist_ok=True)
         
         print(f"Input base directory: {self.input_base.absolute()}")
@@ -576,8 +576,8 @@ class NuScenesConverter:
 
     def _setup_map_files(self):
         """
-        Finds generated map files in the '_out' directory, copies them to the correct
-        'nuscenes_format/maps' structure, and updates the internal map record.
+        Finds generated map files in the input directory, copies them to the correct
+        'maps/' structure under the output directory, and updates the internal map record.
         """
         source_map_dir = self.input_base
         dest_maps_dir = self.output_base / 'maps'

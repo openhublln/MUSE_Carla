@@ -27,7 +27,7 @@ class SimulationTab(QWidget):
         frequency_container = self._create_spinbox("Frequency (Hz):", 1, 200, 20)
         self.frequency_hz = frequency_container.findChild(QSpinBox)
         
-        self.base_save_path = self._create_path_selector("Base Save Path:", "./_out")
+        self.base_save_path = self._create_path_selector("Base Save Path:", "./data/_out")
         
         # Traffic Group
         traffic_group = QGroupBox("Traffic Settings")

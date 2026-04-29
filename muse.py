@@ -1,9 +1,10 @@
 import sys
 import yaml
+import tempfile
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                             QHBoxLayout, QTabWidget, QLabel, QPushButton,
                             QGroupBox, QTextEdit, QSplitter, QDialog, QMessageBox,
-                            QFileDialog, QComboBox)
+                            QFileDialog, QComboBox, QDoubleSpinBox)
 from PyQt6.QtCore import Qt
 import os
 import subprocess
@@ -365,34 +366,127 @@ class MainWindow(QMainWindow):
             )
 
     def convert_to_nuscene(self):
-        """Run the CARLA to NuScenes conversion script."""
+        """Show conversion options dialog, then run the CARLA to NuScenes conversion."""
         try:
-            converter_config_file_name = "converter_config.yml"
             current_dir = os.path.dirname(os.path.abspath(__file__))
-            converter_config_path = os.path.join(current_dir, converter_config_file_name)
+            converter_config_path = os.path.join(current_dir, "converter_config.yml")
 
             if not os.path.exists(converter_config_path):
                 QMessageBox.warning(
                     self,
                     "Converter Configuration Missing",
-                    f"{converter_config_file_name} not found in the script directory.\\n"
+                    "converter_config.yml not found in the script directory.\n"
                     "Please ensure the converter configuration file is present."
                 )
                 return
 
+            # Load base config to read defaults
+            with open(converter_config_path, 'r') as f:
+                base_config = yaml.safe_load(f)
+
+            # Input dir comes from config.yml (the saved collection config)
+            sim_config_path = os.path.join(current_dir, "config.yml")
+            if os.path.exists(sim_config_path):
+                with open(sim_config_path, 'r') as f:
+                    sim_config = yaml.safe_load(f)
+                input_base = sim_config.get("simulation", {}).get("base_save_path", "data/_out")
+            else:
+                input_base = base_config.get('input', {}).get('base_dir', 'data/_out')
+            default_rate = float(base_config.get('output', {}).get('keyframe_rate', 2.0))
+
+            # --- Conversion options dialog ---
+            dialog = QDialog(self)
+            dialog.setWindowTitle("NuScenes Conversion Options")
+            dialog.setModal(True)
+            dlg_layout = QVBoxLayout()
+
+            # Input dir (informational, read-only)
+            input_row = QHBoxLayout()
+            input_row.addWidget(QLabel("Input data:"))
+            input_label = QLabel(input_base)
+            input_label.setStyleSheet("color: grey;")
+            input_row.addWidget(input_label)
+            input_row.addStretch()
+            dlg_layout.addLayout(input_row)
+
+            # Keyframe rate spinner
+            rate_row = QHBoxLayout()
+            rate_row.addWidget(QLabel("Keyframe rate (Hz):"))
+            rate_spin = QDoubleSpinBox()
+            rate_spin.setRange(0.1, 100.0)
+            rate_spin.setSingleStep(1.0)
+            rate_spin.setDecimals(1)
+            rate_spin.setValue(default_rate)
+            rate_row.addWidget(rate_spin)
+            rate_row.addStretch()
+            dlg_layout.addLayout(rate_row)
+
+            # Output folder preview (auto-updates)
+            out_row = QHBoxLayout()
+            out_row.addWidget(QLabel("Output folder:"))
+
+            def _fmt_rate(hz):
+                """Format Hz value as a clean string for folder naming."""
+                return f"{hz:g}Hz"
+
+            out_preview = QLabel()
+            out_preview.setStyleSheet("color: grey;")
+
+            def _update_preview():
+                rate = rate_spin.value()
+                folder = f"data/nuscenes_{_fmt_rate(rate)}"
+                out_preview.setText(folder)
+
+            rate_spin.valueChanged.connect(_update_preview)
+            _update_preview()
+            out_row.addWidget(out_preview)
+            out_row.addStretch()
+            dlg_layout.addLayout(out_row)
+
+            # Buttons
+            btn_row = QHBoxLayout()
+            ok_btn = QPushButton("Convert")
+            cancel_btn = QPushButton("Cancel")
+            ok_btn.clicked.connect(dialog.accept)
+            cancel_btn.clicked.connect(dialog.reject)
+            btn_row.addWidget(ok_btn)
+            btn_row.addWidget(cancel_btn)
+            dlg_layout.addLayout(btn_row)
+
+            dialog.setLayout(dlg_layout)
+
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+
+            # Build runtime config: patch rate, input and output dirs, write to a temp file
+            keyframe_rate = rate_spin.value()
+            output_dir = f"data/nuscenes_{_fmt_rate(keyframe_rate)}"
+
+            runtime_config = base_config.copy()
+            runtime_config.setdefault('input', {})
+            runtime_config['input']['base_dir'] = input_base
+            runtime_config.setdefault('output', {})
+            runtime_config['output']['keyframe_rate'] = keyframe_rate
+            runtime_config['output']['base_dir'] = output_dir
+
+            with tempfile.NamedTemporaryFile(
+                mode='w', suffix='.yml', delete=False, dir=current_dir,
+                prefix='.converter_runtime_'
+            ) as tmp:
+                yaml.dump(runtime_config, tmp, default_flow_style=False, sort_keys=False)
+                tmp_config_path = tmp.name
+
             python_exe = sys.executable
-            
-            # Show starting message
+
             QMessageBox.information(
                 self,
                 "Conversion Starting",
-                "Starting conversion to NuScenes format ...\n"
-                "This process may take some time. Please wait.\n"
-                "A notification will appear upon completion."
+                f"Converting at {keyframe_rate:g} Hz → {output_dir}\n\n"
+                "This may take some time. A notification will appear when done."
             )
-            
+
             process = subprocess.Popen(
-                [python_exe, "conversion/carla_to_nuscene_converter.py", converter_config_path],
+                [python_exe, "conversion/carla_to_nuscene_converter.py", tmp_config_path],
                 cwd=current_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -402,29 +496,33 @@ class MainWindow(QMainWindow):
                 encoding="utf-8",
                 errors="replace"
             )
-            
-            # Wait for the process to complete and get output
+
             stdout, stderr = process.communicate()
-            
+
+            # Clean up temp config
+            try:
+                os.unlink(tmp_config_path)
+            except OSError:
+                pass
+
             if process.returncode == 0:
                 QMessageBox.information(
                     self,
                     "Conversion Complete",
-                    "Data conversion to NuScenes format completed successfully!"
+                    f"Conversion to NuScenes format complete!\n\nOutput: {output_dir}"
                 )
             else:
                 QMessageBox.critical(
                     self,
                     "Conversion Failed",
-                    f"Data conversion to NuScenes format failed.\n\n"
-                    f"Error:\n{stderr}"
+                    f"Conversion failed.\n\nError:\n{stderr}"
                 )
-                
+
         except Exception as e:
             QMessageBox.critical(
-                self, 
-                "Error", 
-                f"Failed to start or complete NuScenes conversion: {str(e)}"
+                self,
+                "Error",
+                f"Failed to run NuScenes conversion: {str(e)}"
             )
 
 def main():

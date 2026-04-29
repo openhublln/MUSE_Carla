@@ -1,74 +1,50 @@
 # NuScenes Converter Configuration
 
-# Target NuScenes version
-version: 'v1.0'
+version: 'v1.0-mini'
 
-# Input/Output paths
 input:
-  base_dir: '_out'  # Base directory containing scene folders
+  base_dir: 'data/_out'
 
 output:
-  base_dir: 'nuscenes_format'  # Output directory for NuScenes format data
-  maintain_folder_structure: true  # Keep original scene folder structure
-  keyframe_rate: 2.0  
+  base_dir: 'data/nuscenes_format'  # overridden at runtime by the GUI (data/nuscenes_<rate>Hz)
+  keyframe_rate: 2.0                # Hz — must be <= collection frequency_hz
 
-# Keyframe settings
 keyframe:
-  rate: 2  # Hz — matches collection frequency_hz in config.yml
-  min_points_per_object: 1  # Minimum number of lidar points for valid annotation
+  min_points_per_object: 1  # minimum lidar points required for a valid annotation
 
-# Coordinate system
-coordinate_system:
-  up_axis: 'z'  # CARLA uses Z-up coordinate system
-  forward_axis: 'x'  # CARLA uses X-forward coordinate system
-  use_ego_vehicle_frame: false  # Whether to use ego vehicle as origin
-
-# Sensor mappings (CARLA sensor -> NuScenes channel)
+# CARLA sensor name -> NuScenes channel name
 sensor_mappings:
   camera:
-    'Camera_Front': 'CAM_FRONT'
-    'Camera_Back': 'CAM_BACK'
+    'Camera_Front':      'CAM_FRONT'
+    'Camera_Back':       'CAM_BACK'
     'Camera_FrontRight': 'CAM_FRONT_RIGHT'
-    'Camera_FrontLeft': 'CAM_FRONT_LEFT' 
-    'Camera_BackRight': 'CAM_BACK_RIGHT'
-    'Camera_BackLeft': 'CAM_BACK_LEFT'
+    'Camera_FrontLeft':  'CAM_FRONT_LEFT'
+    'Camera_BackRight':  'CAM_BACK_RIGHT'
+    'Camera_BackLeft':   'CAM_BACK_LEFT'
   radar:
-    'Radar_Front': 'RADAR_FRONT'
+    'Radar_Front':      'RADAR_FRONT'
     'Radar_FrontRight': 'RADAR_FRONT_RIGHT'
-    'Radar_FrontLeft': 'RADAR_FRONT_LEFT'
-    'Radar_BackRight': 'RADAR_BACK_RIGHT'
-    'Radar_BackLeft': 'RADAR_BACK_LEFT'
+    'Radar_FrontLeft':  'RADAR_FRONT_LEFT'
+    'Radar_BackRight':  'RADAR_BACK_RIGHT'
+    'Radar_BackLeft':   'RADAR_BACK_LEFT'
   lidar:
     'Lidar': 'LIDAR_TOP'
- # semantic_lidar:
- #   'Semantic_Lidar': 'SEMANTIC_LIDAR'
+  # semantic_lidar:
+  #   'Semantic_Lidar': 'SEMANTIC_LIDAR'
   gnss:
     'GNSS': 'GNSS'
   imu:
     'IMU': 'IMU'
 
-# Category mappings (category from _3dbbox.json -> NuScenes category leaf name)
-# Categories are already resolved to NuScenes leaf names at collection time
-# (see bounding_box_export.py _BLUEPRINT_TO_NUSCENES). These are 1-to-1 passthroughs.
+# Category passthrough: _3dbbox.json label -> NuScenes category name
 category_mappings:
-  'vehicle.car':                  'vehicle.car'
-  'vehicle.truck':                'vehicle.truck'
-  'vehicle.emergency.police':     'vehicle.emergency.police'
-  'vehicle.emergency.ambulance':  'vehicle.emergency.ambulance'
-  'vehicle.bus.rigid':            'vehicle.bus.rigid'
-  'human.pedestrian':             'human.pedestrian.adult'
-  # Available NuScenes categories (for reference):
-  # vehicle.car | vehicle.truck | vehicle.bus.bendy | vehicle.bus.rigid
-  # vehicle.construction | vehicle.emergency.ambulance | vehicle.emergency.police
-  # vehicle.trailer | vehicle.motorcycle | vehicle.bicycle
-  # human.pedestrian.adult | human.pedestrian.child | human.pedestrian.construction_worker
-  # human.pedestrian.personal_mobility | human.pedestrian.police_officer
-  # human.pedestrian.stroller | human.pedestrian.wheelchair
-  # movable_object.barrier | movable_object.debris | movable_object.pushable_pullable
-  # movable_object.trafficcone | static_object.bicycle_rack | animal
-  
+  'vehicle.car':                 'vehicle.car'
+  'vehicle.truck':               'vehicle.truck'
+  'vehicle.emergency.police':    'vehicle.emergency.police'
+  'vehicle.emergency.ambulance': 'vehicle.emergency.ambulance'
+  'vehicle.bus.rigid':           'vehicle.bus.rigid'
+  'human.pedestrian':            'human.pedestrian.adult'
 
-# Attribute definitions
 attributes:
   vehicle:
     - name: 'vehicle.moving'
@@ -80,4 +56,3 @@ attributes:
 
 performance:
   max_workers: 5
-  verbose: false

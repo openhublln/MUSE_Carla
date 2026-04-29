@@ -1,6 +1,5 @@
-# Data output
-_out/
-nuscenes_format/
+# Data 
+data/
 v1.0-mini/
 
 # Virtual environments
