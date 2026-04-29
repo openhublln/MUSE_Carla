@@ -31,12 +31,22 @@ class MainWindow(QMainWindow):
         tabs.addTab(self.sensor_tab, "Sensors")
         
         # Create YAML preview
-        preview_group = QGroupBox("YAML Preview")
+        self._preview_group = QGroupBox("YAML Preview")
         preview_layout = QVBoxLayout()
+        preview_layout.setSpacing(4)
+
+        # Unsaved indicator — always present (fixed height), so layout never reflows.
+        # Text and colour toggle; invisible state shows blank.
+        self._unsaved_label = QLabel("")
+        self._unsaved_label.setFixedHeight(18)
+        self._unsaved_label.setStyleSheet("color: transparent;")  # invisible by default
+        preview_layout.addWidget(self._unsaved_label)
+
         self.preview = QTextEdit()
         self.preview.setReadOnly(True)
         preview_layout.addWidget(self.preview)
-        preview_group.setLayout(preview_layout)
+        self._preview_group.setLayout(preview_layout)
+        preview_group = self._preview_group  # alias for splitter below
         
         # Add save, run and visualize buttons
         button_layout = QHBoxLayout()
@@ -68,9 +78,9 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
         splitter.addWidget(preview_group)
-        # Set initial proportions to 70/30
-        splitter.setStretchFactor(0, 7)  # Left panel gets 70%
-        splitter.setStretchFactor(1, 3)  # Preview gets 30%
+        # Set initial proportions to 60/40
+        splitter.setStretchFactor(0, 6)  # Left panel gets 60%
+        splitter.setStretchFactor(1, 4)  # Preview gets 40%
         
         layout.addWidget(splitter)
         central_widget.setLayout(layout)
@@ -79,56 +89,89 @@ class MainWindow(QMainWindow):
         # Connect signals for live preview updates
         self.sim_tab.configChanged.connect(self.update_preview)
         self.sensor_tab.configChanged.connect(self.update_preview)
-        
-        # Initial preview update
-        self.update_preview()
+
+        # Load config.yml if it exists, then take initial snapshot of saved state
+        self._saved_yaml = ""
+        self._load_config_from_disk()
+        # update_preview is called inside _load_config_from_disk (via configChanged),
+        # so _saved_yaml is set there.  If the file was absent, do a plain initial update.
+        if not self._saved_yaml:
+            self.update_preview()
+            self._saved_yaml = self.preview.toPlainText()
     
+    def _current_yaml(self):
+        """Return YAML string for the current widget state."""
+        sim_config = self.sim_tab.get_config()
+        sensors_config = self.sensor_tab.get_config()
+        config = {
+            "simulation": sim_config["simulation"],
+            "sensors": sensors_config
+        }
+        return yaml.dump(config, default_flow_style=False, sort_keys=False)
+
+    def _set_dirty(self, dirty):
+        """Toggle the unsaved-changes indicator without affecting layout."""
+        if dirty:
+            self._unsaved_label.setText("● unsaved changes")
+            self._unsaved_label.setStyleSheet("color: #c0702a; font-style: italic; font-size: 11px;")
+        else:
+            self._unsaved_label.setText("")
+            self._unsaved_label.setStyleSheet("color: transparent;")
+
+    def _load_config_from_disk(self):
+        """Load config.yml into tabs if it exists."""
+        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yml")
+        if not os.path.exists(config_path):
+            return
+        try:
+            with open(config_path, 'r') as f:
+                cfg = yaml.safe_load(f)
+            if not cfg:
+                return
+            # Populate tabs (signals blocked internally)
+            self.sim_tab.load_config(cfg)
+            self.sensor_tab.load_config(cfg.get("sensors", []))
+            # Snapshot the saved state
+            saved = self._current_yaml()
+            self._saved_yaml = saved
+            # Update preview without marking as unsaved
+            scrollbar = self.preview.verticalScrollBar()
+            pos = scrollbar.value()
+            self.preview.setPlainText(saved)
+            scrollbar.setValue(pos)
+            self._set_dirty(False)
+        except Exception as e:
+            print(f"Warning: could not load config.yml: {e}")
+
     def update_preview(self):
         """Update the YAML preview while maintaining scroll position"""
         try:
-            # Store current scroll position
             scrollbar = self.preview.verticalScrollBar()
             current_pos = scrollbar.value()
-            
-            # Update YAML content
-            sim_config = self.sim_tab.get_config()
-            sensors_config = self.sensor_tab.get_config()
-            config = {
-                "simulation": sim_config["simulation"],
-                "sensors": sensors_config
-            }
-            yaml_str = yaml.dump(config, default_flow_style=False, sort_keys=False)
-            
-            # Update text and restore scroll position
+
+            yaml_str = self._current_yaml()
             self.preview.setPlainText(yaml_str)
             scrollbar.setValue(current_pos)
-            
+
+            # Visual feedback: unsaved changes
+            is_dirty = (yaml_str != self._saved_yaml)
+            self._set_dirty(is_dirty)
         except Exception as e:
             self.preview.setPlainText(f"Error generating YAML: {str(e)}")
-    
+
     def save_config(self):
-        """Save the configuration to a YAML file"""
+        """Save the current configuration to config.yml."""
         try:
-            # Set default filename to config.yml
-            default_filename = "config.yml"
-            file_path, _ = QFileDialog.getSaveFileName(
-                self, 
-                "Save Configuration",
-                default_filename,
-                "YAML Files (*.yml *.yaml)"
-            )
-            
-            # Only save if user selected a file path
-            if file_path:
-                config = {
-                    "simulation": self.sim_tab.get_config()["simulation"],
-                    "sensors": self.sensor_tab.get_config()
-                }
-                with open(file_path, 'w') as f:
-                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-                QMessageBox.information(self, "Success", 
-                                    f"Configuration saved to {file_path}")
-                
+            config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yml")
+            config = {
+                "simulation": self.sim_tab.get_config()["simulation"],
+                "sensors": self.sensor_tab.get_config()
+            }
+            with open(config_path, 'w') as f:
+                yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+            # Update saved snapshot and clear indicator
+            self._saved_yaml = self._current_yaml()
+            self._set_dirty(False)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
     

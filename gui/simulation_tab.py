@@ -95,6 +95,30 @@ class SimulationTab(QWidget):
             self.path_edit.setText(path)
             self.configChanged.emit()
     
+    def load_config(self, cfg):
+        """Populate widgets from a config dict (simulation + traffic keys)."""
+        sim = cfg.get("simulation", cfg)  # accept top-level or nested
+        traffic = sim.get("traffic", {})
+
+        # Block signals while loading to avoid spurious configChanged emissions
+        widgets = [self.num_scenes, self.seconds_per_scene, self.frequency_hz,
+                   self.num_vehicles, self.num_pedestrians,
+                   self.safe_spawn, self.car_lights_on, self.path_edit]
+        for w in widgets:
+            w.blockSignals(True)
+
+        self.num_scenes.setValue(int(sim.get("num_scenes", self.num_scenes.value())))
+        self.seconds_per_scene.setValue(int(sim.get("seconds_per_scene", self.seconds_per_scene.value())))
+        self.frequency_hz.setValue(int(sim.get("frequency_hz", self.frequency_hz.value())))
+        self.path_edit.setText(str(sim.get("base_save_path", self.path_edit.text())))
+        self.num_vehicles.setValue(int(traffic.get("num_vehicles", self.num_vehicles.value())))
+        self.num_pedestrians.setValue(int(traffic.get("num_pedestrians", self.num_pedestrians.value())))
+        self.safe_spawn.setChecked(bool(traffic.get("safe_spawn", self.safe_spawn.isChecked())))
+        self.car_lights_on.setChecked(bool(traffic.get("car_lights_on", self.car_lights_on.isChecked())))
+
+        for w in widgets:
+            w.blockSignals(False)
+
     def get_config(self):
         """Return the current configuration as a dictionary"""
         return {

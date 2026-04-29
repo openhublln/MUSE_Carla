@@ -337,6 +337,75 @@ class SensorTab(QWidget):
         sensor.deleteLater()
         self.configChanged.emit()
     
+    def load_config(self, sensors_list):
+        """Populate the sensor tab from a list of sensor config dicts."""
+        # Remove all existing sensors
+        for sensor in list(self.sensors):
+            self.sensors.remove(sensor)
+            sensor.deleteLater()
+
+        # Reverse map: stored type string -> combo display text
+        # get_config() lowercases and underscores, e.g. "Camera" -> "camera"
+        _type_reverse = {v.lower().replace(" ", "_"): v
+                         for v in list(SensorWidget.SENSOR_TYPES.keys())}
+        # Also handle blueprint-based lookup for edge cases
+        _bp_reverse = {v: k for k, v in SensorWidget.SENSOR_TYPES.items()}
+
+        for scfg in sensors_list:
+            sensor = SensorWidget(self)
+            sensor.configChanged.connect(self.configChanged.emit)
+            sensor.deleteRequested.connect(self._remove_sensor)
+
+            # Block signals during bulk population
+            sensor.blockSignals(True)
+
+            # Name
+            sensor.name.setText(str(scfg.get("name", "sensor")))
+
+            # Type — stored as lowercased_underscored string or via blueprint
+            stored_type = scfg.get("type", "")
+            display_type = _type_reverse.get(stored_type)
+            if display_type is None:
+                # Fall back to blueprint lookup
+                display_type = _bp_reverse.get(scfg.get("blueprint", ""), "Camera")
+            idx = sensor.type.findText(display_type)
+            if idx >= 0:
+                sensor.type.setCurrentIndex(idx)
+                sensor._update_attributes()  # rebuild attribute widgets for this type
+                if display_type == "Camera":
+                    sensor.bbox_widget.setVisible(True)
+
+            # Attributes
+            attrs = scfg.get("attributes", {})
+            for attr_name, value in attrs.items():
+                if attr_name in sensor.attributes_dict:
+                    try:
+                        sensor.attributes_dict[attr_name].setValue(float(value))
+                    except Exception:
+                        pass
+
+            # Transform
+            tf = scfg.get("transform", {})
+            loc = tf.get("location", {})
+            rot = tf.get("rotation", {})
+            sensor.transform.location.x.setValue(float(loc.get("x", 0)))
+            sensor.transform.location.y.setValue(float(loc.get("y", 0)))
+            sensor.transform.location.z.setValue(float(loc.get("z", 0)))
+            sensor.transform.rotation.pitch.setValue(float(rot.get("pitch", 0)))
+            sensor.transform.rotation.yaw.setValue(float(rot.get("yaw", 0)))
+            sensor.transform.rotation.roll.setValue(float(rot.get("roll", 0)))
+
+            # collect_bbox
+            if display_type == "Camera":
+                sensor.collect_bbox.setChecked(bool(scfg.get("collect_bbox", False)))
+
+            sensor.blockSignals(False)
+
+            self.sensors.append(sensor)
+            self.sensors_layout.addWidget(sensor)
+
+        self.configChanged.emit()
+
     def get_config(self):
         """Return the list of sensor configurations"""
         return [sensor.get_config() for sensor in self.sensors]
