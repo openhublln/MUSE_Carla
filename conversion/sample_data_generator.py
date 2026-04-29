@@ -173,7 +173,12 @@ class SampleDataGenerator:
         simulation_sensors = self.converter.sim_config.get("sensors", [])
         
         scene_samples = [entry for entry in self.converter.samples if entry["scene_token"] == scene_token]
-        sample_timestamps = {entry["timestamp"]: entry["token"] for entry in scene_samples}
+        epoch_base_us = getattr(self.converter, 'epoch_base_us', 0)
+        # Key by raw sim-ms timestamp so lookups by file-stem timestamps work correctly
+        sample_timestamps = {
+            (entry["timestamp"] - epoch_base_us) // 1000: entry["token"]
+            for entry in scene_samples
+        }
         keyframe_timestamps = set(sample_timestamps.keys())
         sorted_keyframes = sorted(keyframe_timestamps)
         def nearest_keyframe(ts: int):
@@ -332,7 +337,7 @@ class SampleDataGenerator:
                         ep_token = generate_token()
                         new_ep = {
                             "token": ep_token,
-                            "timestamp": timestamp_local,
+                            "timestamp": self.converter.epoch_base_us + timestamp_local * 1000,
                             "translation": ep_data["translation"],
                             "rotation": ep_data["rotation"],
                         }

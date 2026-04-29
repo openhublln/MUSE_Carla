@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parent.parent  # MUSE_Carla/
 class NuScenesFixes:
     """Comprehensive fix module for nuScenes data format issues."""
     
-    def __init__(self, output_base: Path):
+    def __init__(self, output_base: Path, version: str = 'v1.0-mini'):
         self.output_base = output_base
-        self.version_dir = output_base / 'v1.0'
+        self.version_dir = output_base / version
         
     def fix_all_issues(self):
         """Apply all fixes to ensure nuScenes compatibility."""

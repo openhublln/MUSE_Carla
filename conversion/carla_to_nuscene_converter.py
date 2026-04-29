@@ -559,7 +559,7 @@ class NuScenesConverter:
         print("\n" + "="*50)
         print("APPLYING AUTOMATIC NUSCENES FORMAT FIXES")
         print("="*50)
-        fixes = NuScenesFixes(self.output_base)
+        fixes = NuScenesFixes(self.output_base, self.version)
         fixes.fix_all_issues()
         print("="*50)
         print("CONVERSION COMPLETED SUCCESSFULLY!")

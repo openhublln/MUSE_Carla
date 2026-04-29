@@ -90,8 +90,13 @@ class AnnotationGenerator:
         return avg
 
     def generate_sample_annotations(self, scene_folder: str, scene_token: str):
-        sample_token_map = {entry["timestamp"]: entry["token"] 
-                            for entry in self.converter.samples if entry["scene_token"] == scene_token}
+        # Key by raw sim-ms timestamp (same as bbox filename stems and token_maps['sample'])
+        # entry["timestamp"] is epoch µs; convert back to sim-ms for file-name matching
+        epoch_base_us = getattr(self.converter, 'epoch_base_us', 0)
+        sample_token_map = {
+            (entry["timestamp"] - epoch_base_us) // 1000: entry["token"]
+            for entry in self.converter.samples if entry["scene_token"] == scene_token
+        }
         
         # print(f"[Debug SA {scene_folder}]: Found {len(sample_token_map)} samples for this scene.") # DEBUG
         if not sample_token_map:
