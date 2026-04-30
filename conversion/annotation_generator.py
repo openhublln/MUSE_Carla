@@ -203,14 +203,20 @@ class AnnotationGenerator:
                                 # Load raw LIDAR points once and invert Y once per timestamp
                                 lidar_points_nuscenes = lidar_points_cache.get(timestamp)
                                 if lidar_points_nuscenes is None:
-                                    lidar_points_carla = np.load(lidar_file)
-                                    lidar_points_nuscenes = lidar_points_carla
+                                    lidar_points_raw = np.load(lidar_file)
                                     try:
-                                        lidar_points_nuscenes = lidar_points_nuscenes.astype(np.float32, copy=False)
+                                        lidar_points_raw = lidar_points_raw.astype(np.float32, copy=False)
                                     except Exception:
                                         pass
-                                    lidar_points_nuscenes = lidar_points_nuscenes.copy()
-                                    lidar_points_nuscenes[:, 1] *= -1  # Negate Y coordinate
+                                    # Transform sensor-local → world (CARLA frame)
+                                    sensor_transform_rel, ego_transform_abs = self.converter._get_sensor_transform(scene_folder, lidar_sensor_name, timestamp)
+                                    if sensor_transform_rel is not None and ego_transform_abs is not None:
+                                        lidar_points_world = transform_points_to_global(lidar_points_raw, sensor_transform_rel, ego_transform_abs)
+                                    else:
+                                        lidar_points_world = lidar_points_raw.copy()
+                                    lidar_points_world = lidar_points_world.copy()
+                                    lidar_points_world[:, 1] *= -1  # CARLA Y-right → NuScenes Y-left
+                                    lidar_points_nuscenes = lidar_points_world
                                     lidar_points_cache[timestamp] = lidar_points_nuscenes
                                 # KDTree candidate filter
                                 tree = lidar_kd_cache.get(timestamp)
@@ -319,7 +325,9 @@ class AnnotationGenerator:
                              if tok == instance_token and sf == scene_folder), None)
             if actor_id is None: continue
             
-            avg_visibility = self._compute_average_visibility(scene_folder, sample["timestamp"], actor_id)
+            epoch_base_us = getattr(self.converter, 'epoch_base_us', 0)
+            sim_ms_timestamp = (sample["timestamp"] - epoch_base_us) // 1000
+            avg_visibility = self._compute_average_visibility(scene_folder, sim_ms_timestamp, actor_id)
             visibility_level = self._get_visibility_level(avg_visibility)
             visibility_token = self.converter.token_maps['visibility'].get(visibility_level)
             

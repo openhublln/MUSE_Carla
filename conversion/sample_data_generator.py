@@ -371,16 +371,29 @@ class SampleDataGenerator:
                             print(f"Converted {file_path.name} to {target_file_local.name}")
                     elif sensor_type == "radar":
                         points = np.load(file_path)
-                        if points.shape[1] < 18:
-                            padded_points = np.zeros((points.shape[0], 18))
-                            padded_points[:, :points.shape[1]] = points
+                        # Convert spherical (depth, alt_deg, az_deg, velocity, intensity) to Cartesian
+                        if points.shape[0] > 0 and points.shape[1] >= 3:
+                            depth = points[:, 0]
+                            alt_rad = np.radians(points[:, 1])
+                            az_rad  = np.radians(points[:, 2])
+                            x =  depth * np.cos(alt_rad) * np.cos(az_rad)
+                            y =  depth * np.cos(alt_rad) * np.sin(az_rad)
+                            z =  depth * np.sin(alt_rad)
+                            cart = np.column_stack([x, y, z, points[:, 3], points[:, 4]])
+                        else:
+                            cart = points
+                        if cart.shape[1] < 18:
+                            padded_points = np.zeros((cart.shape[0], 18))
+                            padded_points[:, :cart.shape[1]] = cart
                             points = padded_points
+                        else:
+                            points = cart
                         with open(target_file_local, 'wb') as f:
                             f.write(b"# .PCD v0.7 - Point Cloud Data file format\n")
                             f.write(b"VERSION 0.7\n")
                             f.write(b"FIELDS x y z dyn_prop id rcs vx vy vx_comp vy_comp is_quality_valid ambig_state x_rms y_rms invalid_state pdh0 vx_rms vy_rms\n")
-                            f.write(b"SIZE 4 4 4 1 2 4 4 4 4 4 1 1 1 1 1 1 1 1\n")
-                            f.write(b"TYPE F F F I I F F F F F I I I I I I I I\n")
+                            f.write(b"SIZE 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4\n")
+                            f.write(b"TYPE F F F F F F F F F F F F F F F F F F\n")
                             f.write(b"COUNT 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1\n")
                             f.write(f"WIDTH {points.shape[0]}\n".encode())
                             f.write(b"HEIGHT 1\n")
