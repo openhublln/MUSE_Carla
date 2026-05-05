@@ -50,19 +50,16 @@ class MainWindow(QMainWindow):
         
         # Add save, run and visualize buttons
         button_layout = QHBoxLayout()
-        launch_btn = QPushButton("Launch CARLA")
         save_btn = QPushButton("Save Configuration")
         run_btn = QPushButton("Run Simulation")
         visualize_btn = QPushButton("Visualize Simulation")
         convert_nuscene_btn = QPushButton("Convert to NuScenes")
-        
-        launch_btn.clicked.connect(self.launch_carla)
+
         save_btn.clicked.connect(self.save_config)
         run_btn.clicked.connect(self.run_simulation)
         visualize_btn.clicked.connect(self.visualize_simulation)
         convert_nuscene_btn.clicked.connect(self.convert_to_nuscene)
-        
-        button_layout.addWidget(launch_btn)
+
         button_layout.addWidget(save_btn)
         button_layout.addWidget(run_btn)
         button_layout.addWidget(visualize_btn)
@@ -175,68 +172,131 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save configuration: {str(e)}")
     
+    def _find_carla_executable(self):
+        """Return path to CarlaUnreal.sh/.exe, or raise FileNotFoundError."""
+        carla_root = Path(os.path.abspath(__file__)).parents[3]
+        if sys.platform == "win32":
+            exe = carla_root / "CarlaUnreal.exe"
+            if not exe.exists():
+                raise FileNotFoundError(f"CARLA executable not found: {exe}")
+            return exe, carla_root
+        else:
+            for name in ("CarlaUnreal.sh", "CarlaUnreal"):
+                exe = carla_root / name
+                if exe.exists():
+                    return exe, carla_root
+            raise FileNotFoundError(
+                f"CARLA executable not found in {carla_root} "
+                "(tried CarlaUnreal.sh and CarlaUnreal)"
+            )
+
+    def _wait_for_carla(self, host="localhost", port=2000, timeout=120):
+        """Block until CARLA accepts TCP connections on port 2000 or timeout expires.
+
+        Returns True if CARLA is ready, False on timeout.
+        """
+        import socket, time
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection((host, port), timeout=2):
+                    return True
+            except OSError:
+                time.sleep(2)
+        return False
+
     def run_simulation(self):
-        """Save the configuration and run the simulation"""
+        """Launch CARLA headless (-RenderOffScreen), wait until ready, run collection, then shut CARLA down."""
+        import time, signal
+
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(current_dir, "config.yml")
+
+        if not os.path.exists(config_path):
+            QMessageBox.warning(
+                self,
+                "Configuration Missing",
+                "Please save your configuration first using the Save Configuration button."
+            )
+            return
+
+        carla_proc = None
         try:
-            # Check if config.yml exists, if not prompt user to save first
-            if not os.path.exists('config.yml'):
-                QMessageBox.warning(
-                    self, 
-                    "Configuration Missing",
-                    "Please save your configuration first using the Save Configuration button."
+            # --- 1. Locate and launch CARLA ---
+            carla_exe, carla_root = self._find_carla_executable()
+            carla_log = carla_root / "carla_launch.log"
+
+            with open(carla_log, "w") as lf:
+                carla_proc = subprocess.Popen(
+                    [str(carla_exe), "-RenderOffScreen"],
+                    cwd=str(carla_root),
+                    stdout=lf,
+                    stderr=lf,
+                    start_new_session=True
                 )
-                return
-            
-            # Get current script directory
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            
-            # Get Python executable from current environment
+
+            # --- 2. Wait for CARLA to be ready ---
+            QMessageBox.information(
+                self,
+                "CARLA Starting",
+                "CARLA is starting in headless mode (-RenderOffScreen).\n\n"
+                "Click OK — the GUI will wait up to 2 minutes for CARLA to be ready,\n"
+                "then start data collection automatically."
+            )
+
+            if not self._wait_for_carla(timeout=120):
+                raise RuntimeError(
+                    "CARLA did not become ready within 2 minutes.\n"
+                    f"Check the log for details:\n  {carla_log}"
+                )
+
+            # Extra settling time after port opens (UE5 needs a few more seconds to finish init)
+            time.sleep(5)
+
+            # --- 3. Run data collection ---
             python_exe = sys.executable
-            
-            # Create process with proper working directory
-            process = subprocess.Popen(
+            collection_proc = subprocess.Popen(
                 [python_exe, "collection/multi_sensor_collection.py"],
                 cwd=current_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1,
-                universal_newlines=True,
                 encoding="utf-8",
                 errors="replace"
             )
-            
-            # Show a more informative dialog
-            msg = QMessageBox()
-            msg.setIcon(QMessageBox.Icon.Information)
-            msg.setText("Simulation is running...\n\n" + 
-                       "Check the console for output.\n" +
-                       "The simulation may take several minutes to complete.")
-            msg.setWindowTitle("Simulation Status")
-            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-            msg.exec()
-            
-            # Get results (non-blocking)
-            stdout, stderr = process.communicate()
-            
-            if process.returncode == 0:
-                # Show success message
-                QMessageBox.information(
-                    self,
-                    "Simulation Complete",
-                    "The simulation has finished successfully!\n\n" +
-                    "Data has been saved to the output directory."
-                )
-            else:
+
+            stdout, stderr = collection_proc.communicate()
+
+            if collection_proc.returncode != 0:
                 raise RuntimeError(f"Simulation failed:\n{stderr}")
-            
+
+            QMessageBox.information(
+                self,
+                "Simulation Complete",
+                "The simulation has finished successfully!\n\n"
+                "Data has been saved to the output directory."
+            )
+
         except Exception as e:
             QMessageBox.critical(
-                self, 
-                "Error", 
-                f"Failed to run simulation: {str(e)}\n\n" +
-                "Make sure CARLA simulator is running!"
+                self,
+                "Error",
+                f"Failed to run simulation: {str(e)}"
             )
+        finally:
+            # --- 4. Always shut CARLA down ---
+            if carla_proc is not None and carla_proc.poll() is None:
+                try:
+                    os.killpg(os.getpgid(carla_proc.pid), signal.SIGTERM)
+                except Exception:
+                    carla_proc.terminate()
+                try:
+                    carla_proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    try:
+                        os.killpg(os.getpgid(carla_proc.pid), signal.SIGKILL)
+                    except Exception:
+                        carla_proc.kill()
     
     def visualize_simulation(self):
         """Show scene selection dialog and run visualization"""
@@ -322,92 +382,6 @@ class MainWindow(QMainWindow):
                 f"Failed to start visualization: {str(e)}"
             )
     
-    def launch_carla(self):
-        """Launch CARLA server using relative path (Linux/Windows compatible)"""
-        try:
-            # Get the path to CARLA by going up from current directory
-            current_dir = Path(os.path.abspath(__file__))  # Get path to current script
-            carla_root = current_dir.parents[3]  # Go up 4 levels to CARLA root
-
-            if sys.platform == "win32":
-                carla_exe = carla_root / "CarlaUnreal.exe"
-                if not carla_exe.exists():
-                    raise FileNotFoundError(f"CARLA executable not found at: {carla_exe}")
-                subprocess.Popen(
-                    str(carla_exe),
-                    cwd=str(carla_root),
-                    creationflags=subprocess.CREATE_NEW_CONSOLE
-                )
-            else:
-                # Linux: prefer the shell launcher, fall back to bare binary
-                carla_sh = carla_root / "CarlaUnreal.sh"
-                carla_bin = carla_root / "CarlaUnreal"
-                if carla_sh.exists():
-                    carla_exe = carla_sh
-                elif carla_bin.exists():
-                    carla_exe = carla_bin
-                else:
-                    raise FileNotFoundError(
-                        f"CARLA executable not found at: {carla_sh} or {carla_bin}"
-                    )
-
-                # Try to open in a new terminal window; fall back to background process
-                log_file = carla_root / "carla_launch.log"
-                terminal_cmds = [
-                    ["tilix", "-e",
-                     f"bash -c '{carla_exe}; exec bash'"],
-                    ["gnome-terminal", "--disable-factory", "--", "bash", "-c",
-                     f"{carla_exe}; exec bash"],
-                    ["xterm", "-e", f"{carla_exe}"],
-                    ["konsole", "--noclose", "-e", f"{carla_exe}"],
-                    ["xfce4-terminal", "--hold", "-e", f"{carla_exe}"],
-                ]
-                launched = False
-                for cmd in terminal_cmds:
-                    try:
-                        ret = subprocess.Popen(
-                            cmd, cwd=str(carla_root),
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL
-                        )
-                        # Give it 1 second and check it didn't immediately die
-                        import time
-                        time.sleep(1)
-                        if ret.poll() is None:
-                            launched = True
-                            break
-                    except FileNotFoundError:
-                        continue
-
-                if not launched:
-                    # All GUI terminals failed — launch detached, log to file
-                    with open(log_file, "w") as lf:
-                        subprocess.Popen(
-                            [str(carla_exe)],
-                            cwd=str(carla_root),
-                            stdout=lf,
-                            stderr=lf,
-                            start_new_session=True
-                        )
-
-            # Show a message to wait for CARLA to start
-            QMessageBox.information(
-                self,
-                "CARLA Starting",
-                "CARLA is starting...\n\n"
-                "Please wait for the simulator to fully load before running the simulation.\n\n"
-                "On Linux you can monitor the output with:\n"
-                f"  tail -f {carla_root}/carla_launch.log"
-            )
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                f"Failed to launch CARLA: {str(e)}\n\n" +
-                "Please make sure CARLA is correctly installed."
-            )
-
     def convert_to_nuscene(self):
         """Show conversion options dialog, then run the CARLA to NuScenes conversion."""
         try:
