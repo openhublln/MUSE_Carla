@@ -14,8 +14,8 @@ sensors:
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '800.0'
-    image_size_y: '600.0'
+    image_size_x: '400.0'
+    image_size_y: '300.0'
     fov: '90.0'
   transform:
     location:
@@ -31,8 +31,8 @@ sensors:
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '800.0'
-    image_size_y: '600.0'
+    image_size_x: '400.0'
+    image_size_y: '300.0'
     fov: '90.0'
   transform:
     location:
@@ -48,8 +48,8 @@ sensors:
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '800.0'
-    image_size_y: '600.0'
+    image_size_x: '400.0'
+    image_size_y: '300.0'
     fov: '90.0'
   transform:
     location:
@@ -65,8 +65,8 @@ sensors:
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '800.0'
-    image_size_y: '600.0'
+    image_size_x: '400.0'
+    image_size_y: '300.0'
     fov: '90.0'
   transform:
     location:
@@ -82,8 +82,8 @@ sensors:
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '800.0'
-    image_size_y: '600.0'
+    image_size_x: '400.0'
+    image_size_y: '300.0'
     fov: '90.0'
   transform:
     location:
@@ -99,8 +99,8 @@ sensors:
   type: camera
   blueprint: sensor.camera.rgb
   attributes:
-    image_size_x: '800.0'
-    image_size_y: '600.0'
+    image_size_x: '400.0'
+    image_size_y: '300.0'
     fov: '90.0'
   transform:
     location:
