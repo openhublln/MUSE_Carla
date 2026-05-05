@@ -338,23 +338,10 @@ class MainWindow(QMainWindow):
             # Kill any leftover CARLA process before launching a new one
             self._kill_existing_carla()
 
-            # Build environment: inject Vulkan layer that strips DEVICE_LOCAL from
-            # HOST_VISIBLE memory types, preventing BAR heap OOM on systems where
-            # ReBAR is disabled at the driver level (EnableResizableBar=0).
-            layer_dir = str(Path(__file__).resolve().parent / "vulkan_layer")
-            launch_env = os.environ.copy()
-            launch_env["VK_LAYER_PATH"] = layer_dir
-            existing_layers = launch_env.get("VK_INSTANCE_LAYERS", "")
-            new_layer = "VK_LAYER_MUSE_no_bar_mem"
-            launch_env["VK_INSTANCE_LAYERS"] = (
-                f"{new_layer}:{existing_layers}" if existing_layers else new_layer
-            )
-
             with open(carla_log, "w") as lf:
                 carla_proc = subprocess.Popen(
                     [str(carla_exe), "-RenderOffScreen"],
                     cwd=str(carla_root),
-                    env=launch_env,
                     stdout=lf,
                     stderr=lf,
                     start_new_session=True
