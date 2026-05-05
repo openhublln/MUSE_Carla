@@ -224,40 +224,65 @@ class MainWindow(QMainWindow):
                 time.sleep(2)
         return False, "timeout"
 
-    def _kill_existing_carla(self, port=2000, wait=8):
-        """Kill any CarlaUnreal process already holding port 2000 before launching a fresh one."""
+    def _kill_existing_carla(self, port=2000, wait=20):
+        """Kill any CarlaUnreal process already holding port 2000 before launching a fresh one.
+        Waits until the port is actually free (not just until the process exits).
+        """
         import time, signal as _signal
-        try:
-            result = subprocess.run(
-                ["lsof", "-t", f"-i:{port}"],
-                capture_output=True, text=True
-            )
-            pids = [int(p) for p in result.stdout.split() if p.strip().isdigit()]
-        except Exception:
-            pids = []
 
-        if not pids:
-            return
-
-        print(f"[muse] Killing stale CARLA PID(s) on port {port}: {pids}")
-        for pid in pids:
+        def _pids_on_port():
             try:
-                os.kill(pid, _signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+                result = subprocess.run(
+                    ["lsof", "-t", f"-i:{port}"],
+                    capture_output=True, text=True
+                )
+                return [int(p) for p in result.stdout.split() if p.strip().isdigit()]
+            except Exception:
+                return []
 
+        def _port_free():
+            import socket
+            try:
+                with socket.create_connection(("localhost", port), timeout=1):
+                    return False
+            except OSError:
+                return True
+
+        pids = _pids_on_port()
+        if not pids and _port_free():
+            return  # nothing to do
+
+        if pids:
+            print(f"[muse] Killing stale CARLA PID(s) on port {port}: {pids}")
+            for pid in pids:
+                try:
+                    os.kill(pid, _signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+
+        # Wait for port to be free (not just process exit — kernel needs to release it)
         deadline = time.monotonic() + wait
-        while pids and time.monotonic() < deadline:
-            time.sleep(0.5)
-            pids = [p for p in pids if _proc_alive(p)]
+        while time.monotonic() < deadline:
+            time.sleep(1)
+            if _port_free():
+                return
 
-        for pid in pids:          # still alive — force kill
+        # Still not free — SIGKILL remaining holders
+        pids = _pids_on_port()
+        for pid in pids:
             try:
                 os.kill(pid, _signal.SIGKILL)
             except ProcessLookupError:
                 pass
-        if pids:
+
+        # Final wait
+        deadline2 = time.monotonic() + 5
+        while time.monotonic() < deadline2:
             time.sleep(1)
+            if _port_free():
+                return
+
+        print(f"[muse] WARNING: port {port} may still be in use after kill attempts")
 
     def _wait_for_carla_rpc(self, carla_proc, host="localhost", port=2000, timeout=60):
         """After the TCP port is open, probe the CARLA RPC until get_world() succeeds.
@@ -313,10 +338,23 @@ class MainWindow(QMainWindow):
             # Kill any leftover CARLA process before launching a new one
             self._kill_existing_carla()
 
+            # Build environment: inject Vulkan layer that strips DEVICE_LOCAL from
+            # HOST_VISIBLE memory types, preventing BAR heap OOM on systems where
+            # ReBAR is disabled at the driver level (EnableResizableBar=0).
+            layer_dir = str(Path(__file__).resolve().parent / "vulkan_layer")
+            launch_env = os.environ.copy()
+            launch_env["VK_LAYER_PATH"] = layer_dir
+            existing_layers = launch_env.get("VK_INSTANCE_LAYERS", "")
+            new_layer = "VK_LAYER_MUSE_no_bar_mem"
+            launch_env["VK_INSTANCE_LAYERS"] = (
+                f"{new_layer}:{existing_layers}" if existing_layers else new_layer
+            )
+
             with open(carla_log, "w") as lf:
                 carla_proc = subprocess.Popen(
                     [str(carla_exe), "-RenderOffScreen"],
                     cwd=str(carla_root),
+                    env=launch_env,
                     stdout=lf,
                     stderr=lf,
                     start_new_session=True
@@ -399,12 +437,25 @@ class MainWindow(QMainWindow):
                 except Exception:
                     carla_proc.terminate()
                 try:
-                    carla_proc.wait(timeout=15)
+                    carla_proc.wait(timeout=30)
                 except subprocess.TimeoutExpired:
                     try:
                         os.killpg(os.getpgid(carla_proc.pid), signal.SIGKILL)
                     except Exception:
                         carla_proc.kill()
+                    try:
+                        carla_proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+            # Ensure port 2000 is free before returning (next run's _kill_existing_carla
+            # is a safety net, but better to be clean here too)
+            import time as _time, socket as _socket
+            for _ in range(10):
+                try:
+                    with _socket.create_connection(("localhost", 2000), timeout=1):
+                        _time.sleep(2)
+                except OSError:
+                    break
     
     def visualize_simulation(self):
         """Show scene selection dialog and run visualization"""
