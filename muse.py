@@ -12,6 +12,17 @@ from pathlib import Path
 from gui.simulation_tab import SimulationTab
 from gui.sensor_tab import SensorTab
 
+
+def _proc_alive(pid):
+    """Return True if the process with the given PID is still running."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but not ours to signal
+
 class MainWindow(QMainWindow):
     """Main window of the configuration editor"""
     def __init__(self):
@@ -190,20 +201,93 @@ class MainWindow(QMainWindow):
                 "(tried CarlaUnreal.sh and CarlaUnreal)"
             )
 
-    def _wait_for_carla(self, host="localhost", port=2000, timeout=120):
-        """Block until CARLA accepts TCP connections on port 2000 or timeout expires.
+    def _wait_for_carla(self, carla_proc, host="localhost", port=2000, timeout=120):
+        """Block until CARLA accepts TCP connections on port 2000, or timeout, or CARLA crashes.
 
-        Returns True if CARLA is ready, False on timeout.
+        Returns (True, None) if ready.
+        Returns (False, "timeout") if the timeout expired without a connection.
+        Returns (False, "crashed") if carla_proc exited before the port opened.
         """
         import socket, time
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            # Check if CARLA already died
+            if carla_proc.poll() is not None:
+                return False, "crashed"
             try:
                 with socket.create_connection((host, port), timeout=2):
-                    return True
+                    # Port is open — do one final liveness check before returning
+                    if carla_proc.poll() is not None:
+                        return False, "crashed"
+                    return True, None
             except OSError:
                 time.sleep(2)
-        return False
+        return False, "timeout"
+
+    def _kill_existing_carla(self, port=2000, wait=8):
+        """Kill any CarlaUnreal process already holding port 2000 before launching a fresh one."""
+        import time, signal as _signal
+        try:
+            result = subprocess.run(
+                ["lsof", "-t", f"-i:{port}"],
+                capture_output=True, text=True
+            )
+            pids = [int(p) for p in result.stdout.split() if p.strip().isdigit()]
+        except Exception:
+            pids = []
+
+        if not pids:
+            return
+
+        print(f"[muse] Killing stale CARLA PID(s) on port {port}: {pids}")
+        for pid in pids:
+            try:
+                os.kill(pid, _signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+
+        deadline = time.monotonic() + wait
+        while pids and time.monotonic() < deadline:
+            time.sleep(0.5)
+            pids = [p for p in pids if _proc_alive(p)]
+
+        for pid in pids:          # still alive — force kill
+            try:
+                os.kill(pid, _signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if pids:
+            time.sleep(1)
+
+    def _wait_for_carla_rpc(self, carla_proc, host="localhost", port=2000, timeout=60):
+        """After the TCP port is open, probe the CARLA RPC until get_world() succeeds.
+
+        Returns (True, None) when the world is fully loaded.
+        Returns (False, "crashed") if carla_proc exits while waiting.
+        Returns (False, "timeout") if timeout expires.
+        """
+        import time
+        try:
+            import carla as _carla
+        except ImportError:
+            # carla not importable in GUI process — fall back to a fixed sleep
+            time.sleep(15)
+            if carla_proc.poll() is not None:
+                return False, "crashed"
+            return True, None
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if carla_proc.poll() is not None:
+                return False, "crashed"
+            try:
+                c = _carla.Client(host, port)
+                c.set_timeout(3.0)
+                c.get_world()
+                return True, None
+            except Exception:
+                time.sleep(2)
+        return False, "timeout"
 
     def run_simulation(self):
         """Launch CARLA headless (-RenderOffScreen), wait until ready, run collection, then shut CARLA down."""
@@ -226,6 +310,9 @@ class MainWindow(QMainWindow):
             carla_exe, carla_root = self._find_carla_executable()
             carla_log = carla_root / "carla_launch.log"
 
+            # Kill any leftover CARLA process before launching a new one
+            self._kill_existing_carla()
+
             with open(carla_log, "w") as lf:
                 carla_proc = subprocess.Popen(
                     [str(carla_exe), "-RenderOffScreen"],
@@ -244,14 +331,33 @@ class MainWindow(QMainWindow):
                 "then start data collection automatically."
             )
 
-            if not self._wait_for_carla(timeout=120):
-                raise RuntimeError(
-                    "CARLA did not become ready within 2 minutes.\n"
-                    f"Check the log for details:\n  {carla_log}"
-                )
+            ready, reason = self._wait_for_carla(carla_proc, timeout=120)
+            if not ready:
+                if reason == "crashed":
+                    raise RuntimeError(
+                        "CARLA crashed during startup.\n"
+                        f"Check the log for details:\n  {carla_log}"
+                    )
+                else:
+                    raise RuntimeError(
+                        "CARLA did not become ready within 2 minutes.\n"
+                        f"Check the log for details:\n  {carla_log}"
+                    )
 
-            # Extra settling time after port opens (UE5 needs a few more seconds to finish init)
-            time.sleep(5)
+            # TCP port is open but the CARLA RPC world may not be ready yet.
+            # Actively probe get_world() until it succeeds (or timeout / crash).
+            rpc_ready, rpc_reason = self._wait_for_carla_rpc(carla_proc, timeout=60)
+            if not rpc_ready:
+                if rpc_reason == "crashed":
+                    raise RuntimeError(
+                        "CARLA crashed before the RPC world became ready.\n"
+                        f"Check the log for details:\n  {carla_log}"
+                    )
+                else:
+                    raise RuntimeError(
+                        "CARLA RPC world did not become ready within 60 seconds after port opened.\n"
+                        f"Check the log for details:\n  {carla_log}"
+                    )
 
             # --- 3. Run data collection ---
             python_exe = sys.executable
@@ -268,7 +374,9 @@ class MainWindow(QMainWindow):
             stdout, stderr = collection_proc.communicate()
 
             if collection_proc.returncode != 0:
-                raise RuntimeError(f"Simulation failed:\n{stderr}")
+                # Include stdout too — collection script prints errors there
+                details = (stderr.strip() or stdout.strip() or "(no output captured)")
+                raise RuntimeError(f"Simulation failed:\n{details}")
 
             QMessageBox.information(
                 self,

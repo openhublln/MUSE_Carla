@@ -1,0 +1,19 @@
+{
+  "map_name": "Town10HD_Opt",
+  "original_carla_map": "Town10HD_Opt",
+  "dataroot": "./",
+  "origin": [
+    -164.5326156616211,
+    118.69317626953125
+  ],
+  "scale": 0.1,
+  "rotation": 0.0,
+  "basemap": {
+    "filename": "Town10HD_Opt_basemap.png",
+    "resolution": 0.1,
+    "size": [
+      7999,
+      7999
+    ]
+  }
+}

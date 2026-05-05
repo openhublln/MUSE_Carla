@@ -197,8 +197,10 @@ def collect_log_info(world, ego_vehicle, base_save_path):
 
 def main():
     """Initialise CARLA, configure sensors, and run data collection."""
+    import sys as _sys
     client = None
     vehicle_list = []
+    _collection_ok = False  # set to True only when all scenes complete successfully
 
     try:
         with open(ROOT / 'config.yml', 'r') as f:
@@ -569,6 +571,8 @@ def main():
         for path in scene_paths:
             process_scene(path)
 
+        _collection_ok = True  # all scenes done, post-processing complete
+
     except KeyboardInterrupt:
         print(" - Interrupted by user.")
     except Exception as e:
@@ -628,6 +632,9 @@ def main():
                             print(f"  Expected files matching {base_save_path}/*_basemap.png")
         except Exception as e:
             print(f"Error during map mask handling: {e}")
+
+    if not _collection_ok:
+        _sys.exit(1)
 
 
 if __name__ == "__main__":
