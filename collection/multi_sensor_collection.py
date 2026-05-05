@@ -230,6 +230,7 @@ def main():
         settings = world.get_settings()
         settings.synchronous_mode   = True
         settings.fixed_delta_seconds = 1.0 / float(frequency_hz)
+        settings.substepping         = False
         world.apply_settings(settings)
 
         # Cache static world vehicles once — expensive RPC, never repeat per frame.
