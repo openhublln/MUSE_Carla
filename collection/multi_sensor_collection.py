@@ -22,6 +22,25 @@ from generate_bbox_annotations import process_scene
 EGO_POSE_FOLDER = "ego_pose"
 LOG_INFO_FILENAME = "log_info.json"
 
+
+def _next_scene_id(base_save_path: str) -> int:
+    """Return the next scene ID by scanning existing scene_N folders.
+
+    If no scene folders exist yet, returns 1.  If scene_1 and scene_2 exist,
+    returns 3 — so new runs always append rather than overwrite.
+    """
+    base = Path(base_save_path)
+    if not base.exists():
+        return 1
+    existing = []
+    for item in base.iterdir():
+        if item.is_dir() and item.name.startswith("scene_"):
+            try:
+                existing.append(int(item.name.split("_", 1)[1]))
+            except ValueError:
+                pass
+    return max(existing) + 1 if existing else 1
+
 # Worker threads for file I/O.  All data passed to workers is plain Python /
 # NumPy — no CARLA C++ objects — so thread count can be higher.
 IO_WORKERS = 8
@@ -233,7 +252,11 @@ def main():
         scene_paths = []
         log_info_collected = False
 
-        for scene_id in range(1, num_scenes + 1):
+        first_scene_id = _next_scene_id(base_save_path)
+        if first_scene_id > 1:
+            print(f"Existing scenes detected — new scenes will start at scene_{first_scene_id}")
+
+        for scene_id in range(first_scene_id, first_scene_id + num_scenes):
             scene_completed = False
             max_scene_retries = 3
 
@@ -561,24 +584,49 @@ def main():
                 print(f"Warning: Failed to destroy some traffic actors: {e}")
             time.sleep(0.5)
 
-        # Generate map mask after all simulation and traffic are gone.
+        # Map mask: use committed asset if available, otherwise generate and commit.
         try:
             if 'base_save_path' in locals() and base_save_path:
-                print(f"\nGenerating map mask...")
-                success = generate_map_mask(base_save_path)
-                if not success:
-                    print("WARNING: Map mask generation failed.")
-                    print("  The converter will not be able to produce a valid map PNG.")
-                    print("  Re-run collection while CARLA is running, or manually run:")
-                    print(f"  python collection/generate_map_mask.py --output {base_save_path}")
+                maps_dir = ROOT / 'maps'
+                maps_dir.mkdir(exist_ok=True)
+
+                # Check whether a committed basemap already exists for any map.
+                import glob as _glob
+                committed = list(maps_dir.glob('*_basemap.png'))
+                if committed:
+                    print(f"\nCommitted map asset found ({committed[0].name}) — skipping map mask generation.")
+                    print("  Delete or rename maps/*_basemap.png to force regeneration.")
                 else:
-                    import glob as _glob
-                    basemaps = _glob.glob(os.path.join(base_save_path, '*_basemap.png'))
-                    if not basemaps:
-                        print("WARNING: generate_map_mask reported success but no *_basemap.png found.")
-                        print(f"  Expected a file matching {base_save_path}/*_basemap.png")
+                    print(f"\nNo committed map asset found — generating map mask...")
+                    success = generate_map_mask(base_save_path)
+                    if not success:
+                        print("WARNING: Map mask generation failed.")
+                        print("  Re-run collection while CARLA is running, or manually run:")
+                        print(f"  python collection/generate_map_mask.py --output {base_save_path}")
+                    else:
+                        # Copy the generated files into maps/ so they can be committed.
+                        generated = _glob.glob(os.path.join(base_save_path, '*_basemap.png'))
+                        generated_json = _glob.glob(os.path.join(base_save_path, '*.json'))
+                        # Only copy the map metadata JSON (not log_info.json).
+                        map_jsons = [
+                            p for p in generated_json
+                            if os.path.basename(p) != LOG_INFO_FILENAME
+                            and '_basemap' not in os.path.basename(p)
+                        ]
+                        copied = []
+                        for src in generated + map_jsons:
+                            dst = maps_dir / os.path.basename(src)
+                            import shutil as _shutil
+                            _shutil.copy2(src, dst)
+                            copied.append(dst.name)
+                        if copied:
+                            print(f"Map assets copied to maps/: {copied}")
+                            print("  Commit the maps/ directory to avoid regeneration on future runs.")
+                        else:
+                            print("WARNING: generate_map_mask reported success but no map files found.")
+                            print(f"  Expected files matching {base_save_path}/*_basemap.png")
         except Exception as e:
-            print(f"Error generating map mask: {e}")
+            print(f"Error during map mask handling: {e}")
 
 
 if __name__ == "__main__":

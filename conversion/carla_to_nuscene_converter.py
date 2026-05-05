@@ -585,9 +585,13 @@ class NuScenesConverter:
 
     def _setup_map_files(self):
         """
-        Copies the basemap PNG (written by generate_map_mask.py during collection)
-        to maps/<token>.png (flat NuScenes mini format) and updates the map record.
-        The basemap must already exist in _out/ — this method never connects to CARLA.
+        Copies the basemap PNG to maps/<token>.png (flat NuScenes mini format) and
+        updates the map record.
+
+        Lookup order:
+          1. <ROOT>/maps/*_basemap.png  — committed project assets (preferred)
+          2. <input_base>/*_basemap.png — generated during data collection (legacy / first run)
+          3. Placeholder none.png       — map will be visually invalid but conversion continues
         """
         dest_maps_dir = self.output_base / 'maps'
         dest_maps_dir.mkdir(parents=True, exist_ok=True)
@@ -595,19 +599,32 @@ class NuScenesConverter:
         map_token = self.maps[0]['token'] if self.maps else None
         map_filename = 'maps/none.png'
 
-        basemap_candidates = list(self.input_base.glob('*_basemap.png'))
-        if basemap_candidates:
-            source_mask_path = basemap_candidates[0]
+        # 1. Committed project assets
+        committed_maps_dir = ROOT / 'maps'
+        committed_candidates = list(committed_maps_dir.glob('*_basemap.png')) if committed_maps_dir.exists() else []
+
+        # 2. Legacy path: generated alongside collected data
+        legacy_candidates = list(self.input_base.glob('*_basemap.png'))
+
+        source_mask_path = None
+        if committed_candidates:
+            source_mask_path = committed_candidates[0]
+            print(f"Using committed map asset: {source_mask_path}")
+        elif legacy_candidates:
+            source_mask_path = legacy_candidates[0]
+            print(f"Using collection-time map asset: {source_mask_path}")
+            print("  Tip: commit maps/*_basemap.png so future conversions don't depend on data/_out/.")
+
+        if source_mask_path:
             dest_mask_path = dest_maps_dir / f"{map_token}.png"
             shutil.copy(source_mask_path, dest_mask_path)
             map_filename = f'maps/{map_token}.png'
             print(f"Map file copied to: {dest_mask_path}")
         else:
             print(
-                f"ERROR: No *_basemap.png found in {self.input_base}.\n"
-                "  The map PNG is generated during data collection (requires CARLA).\n"
-                "  Re-run collection while CARLA is running to produce the basemap,\n"
-                "  then re-run the converter.\n"
+                f"ERROR: No *_basemap.png found in {committed_maps_dir} or {self.input_base}.\n"
+                "  Generate map assets by running a collection while CARLA is running.\n"
+                "  The generated files will be placed in maps/ automatically — commit them.\n"
                 "  Falling back to a placeholder none.png — map will be invalid."
             )
             fallback = dest_maps_dir / 'none.png'
