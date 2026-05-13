@@ -371,36 +371,78 @@ class SampleDataGenerator:
                             print(f"Converted {file_path.name} to {target_file_local.name}")
                     elif sensor_type == "radar":
                         points = np.load(file_path)
-                        # Convert spherical (depth, alt_deg, az_deg, velocity, intensity) to Cartesian
-                        if points.shape[0] > 0 and points.shape[1] >= 3:
-                            depth = points[:, 0]
-                            alt_rad = np.radians(points[:, 1])
-                            az_rad  = np.radians(points[:, 2])
-                            x =  depth * np.cos(alt_rad) * np.cos(az_rad)
-                            y =  depth * np.cos(alt_rad) * np.sin(az_rad)
-                            z =  depth * np.sin(alt_rad)
-                            cart = np.column_stack([x, y, z, points[:, 3], points[:, 4]])
-                        else:
-                            cart = points
-                        if cart.shape[1] < 18:
-                            padded_points = np.zeros((cart.shape[0], 18))
-                            padded_points[:, :cart.shape[1]] = cart
-                            points = padded_points
-                        else:
-                            points = cart
+                        n = points.shape[0]
+
+                        # NuScenes radar structured dtype — matches real PCD exactly (43 bytes/point)
+                        # SIZE 4 4 4 1 2 4 4 4 4 4 1 1 1 1 1 1 1 1
+                        # TYPE F F F I I F F F F F I I I I I I I I
+                        radar_dtype = np.dtype([
+                            ('x',                '<f4'),
+                            ('y',                '<f4'),
+                            ('z',                '<f4'),
+                            ('dyn_prop',         'u1'),
+                            ('id',               '<u2'),
+                            ('rcs',              '<f4'),
+                            ('vx',               '<f4'),
+                            ('vy',               '<f4'),
+                            ('vx_comp',          '<f4'),
+                            ('vy_comp',          '<f4'),
+                            ('is_quality_valid', 'u1'),
+                            ('ambig_state',      'u1'),
+                            ('x_rms',            'u1'),
+                            ('y_rms',            'u1'),
+                            ('invalid_state',    'u1'),
+                            ('pdh0',             'u1'),
+                            ('vx_rms',           'u1'),
+                            ('vy_rms',           'u1'),
+                        ])  # 43 bytes per point
+
+                        out = np.zeros(n, dtype=radar_dtype)
+
+                        if n > 0 and points.shape[1] >= 3:
+                            depth   = points[:, 0].astype(np.float32)
+                            alt_rad = np.radians(points[:, 1]).astype(np.float32)
+                            az_rad  = np.radians(points[:, 2]).astype(np.float32)
+
+                            cos_alt = np.cos(alt_rad)
+                            sin_alt = np.sin(alt_rad)
+                            cos_az  = np.cos(az_rad)
+                            sin_az  = np.sin(az_rad)
+
+                            # Fix 3: negate Y for CARLA (Y-right) → NuScenes (Y-left)
+                            out['x'] =  depth * cos_alt * cos_az
+                            out['y'] = -(depth * cos_alt * sin_az)
+                            out['z'] =  depth * sin_alt
+
+                            if points.shape[1] >= 4:
+                                velocity = points[:, 3].astype(np.float32)
+                                # Fix 2: decompose radial velocity into sensor-frame components
+                                # and place in vx/vy/vx_comp/vy_comp (not dyn_prop/id)
+                                vx_val = velocity * cos_alt * cos_az
+                                vy_val = -(velocity * cos_alt * sin_az)  # negate Y
+                                out['vx']      = vx_val
+                                out['vy']      = vy_val
+                                out['vx_comp'] = vx_val  # no ego-motion removal available
+                                out['vy_comp'] = vy_val
+
+                            if points.shape[1] >= 5:
+                                # Fix 2: map CARLA intensity → rcs field (not into dyn_prop/id)
+                                out['rcs'] = points[:, 4].astype(np.float32)
+
                         with open(target_file_local, 'wb') as f:
                             f.write(b"# .PCD v0.7 - Point Cloud Data file format\n")
                             f.write(b"VERSION 0.7\n")
                             f.write(b"FIELDS x y z dyn_prop id rcs vx vy vx_comp vy_comp is_quality_valid ambig_state x_rms y_rms invalid_state pdh0 vx_rms vy_rms\n")
-                            f.write(b"SIZE 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4\n")
-                            f.write(b"TYPE F F F F F F F F F F F F F F F F F F\n")
+                            # Fix 1: correct SIZE and TYPE for mixed-type fields
+                            f.write(b"SIZE 4 4 4 1 2 4 4 4 4 4 1 1 1 1 1 1 1 1\n")
+                            f.write(b"TYPE F F F I I F F F F F I I I I I I I I\n")
                             f.write(b"COUNT 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1\n")
-                            f.write(f"WIDTH {points.shape[0]}\n".encode())
+                            f.write(f"WIDTH {n}\n".encode())
                             f.write(b"HEIGHT 1\n")
                             f.write(b"VIEWPOINT 0 0 0 1 0 0 0\n")
-                            f.write(f"POINTS {points.shape[0]}\n".encode())
+                            f.write(f"POINTS {n}\n".encode())
                             f.write(b"DATA binary\n")
-                            points.astype(np.float32).tofile(f)
+                            f.write(out.tobytes())
                         if self.verbose:
                             print(f"Converted {file_path.name} to {target_file_local.name}")
                     elif sensor_type == "semantic_lidar":
